@@ -22,7 +22,7 @@
 - ブランチ全体の最終レビュー済み。Critical 1・Important 4・Minor 7 をすべて直した（23790c5）
 - **GPU を使う部分（`forge.load()` と実際の生成・inpaint）は未確認。** 依頼者が Colab で動かす
 - `requirements-colab.txt` の版（diffusers 0.42.1・transformers 5.22.2・accelerate 1.15.0・safetensors 0.8.0）は、`uv pip install --dry-run --exclude-newer 2026-11-07` で解決できた組み合わせ。Colab 上で互いに動くか、`lpw_stable_diffusion_xl` が `v0.42.1` の版で取れるかは未確認
-- `characters/ally05/character.yaml` の `inpaint_box` は null。顔を採用した後に書く
+- ボルグの顔（face）は採用済み。`characters/ally05/` に書き出しと `inpaint_box: [440, 170, 820, 600]` がある（表情を作って、範囲が適切か確かめる）
 
 ## 保留している課題
 
