@@ -39,8 +39,8 @@ GPU を使う処理は依頼者が Colab で動かし、GPU を使わない処�
 1. `notebooks/run.ipynb` を Colab で開き、ランタイムを GPU（T4）にする
 2. 上から順にセルを実行する
    - **準備**: Drive をつなぎ、リポジトリを clone（2 回目以降は pull）し、ライブラリを入れる。Claude が設定を直して push した後は、このセルだけ実行し直せば取り込める
-   - **モデルの読み込み**: `forge` が無いときだけ読み込む（数分）
-   - **顔**: `forge.generate("ally05", "face", n=8)` で 8 枚作って 1 枚選ぶ
+   - **モデルの読み込み**: `forge` が無いときだけ読み込む（数分）。速さのためメモリ節約の設定は入れていない。メモリ不足で止まったときだけ `F.load(".", low_memory=True)` にする（遅くなる）
+   - **顔**: `forge.generate("ally05", "face", n=8, on_image=F.show_one)` で、1 枚できるたびに表示される。調整中は `n=2` など少なくし、気に入らなければ ■ で止めて作り直す（止めても、できた分は Drive に残る）。一気に作るときは `n=16` などにして、後で Drive から見る
    - **表情**: `forge.inpaint("ally05", "hurt", source=<採用した顔>, n=4)`。`inpaint_box` が要るので、顔を採用して Claude が書いた後に実行する
    - **全身**: `forge.generate("ally05", "fullbody", n=4)`
 3. 候補は Drive の `illust-asset-forge/runs/<run_id>/` に `<id>_<型>[_<表情>]_<seed>.png` で保存される

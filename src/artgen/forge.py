@@ -97,6 +97,24 @@ class Forge:
             **self.env,
         }
 
+    def _run(self, seed_list, run_dir: Path, build, on_image) -> list[Path]:
+        """シードごとに生成して保存する。1 枚保存するたびに on_image を呼ぶ。
+
+        ■ で止められたら、保存済みの分を返す（Drive にも残っている）。
+        """
+        paths: list[Path] = []
+        try:
+            for seed in seed_list:
+                image, params, path = build(seed)
+                save_png(image, path, params)
+                paths.append(path)
+                self._finish_one()
+                if on_image is not None:
+                    on_image(path)
+        except KeyboardInterrupt:
+            print(f"中断: {len(paths)} 枚が {run_dir} に保存済み")
+        return paths
+
     def _finish_one(self) -> None:
         gc.collect()
         self.cleanup()
@@ -115,6 +133,7 @@ class Forge:
         remove_negative: str = "",
         guidance: float | None = None,
         steps: int | None = None,
+        on_image: Callable[[Path], None] | None = None,
     ) -> list[Path]:
         character = load_character(self.root, char_id)
         style = load_style(self.root, character.style)
@@ -129,8 +148,8 @@ class Forge:
 
         run_id = datetime.now().strftime("%Y%m%d_%H%M%S")
         run_dir = self.out_dir / run_id
-        paths: list[Path] = []
-        for seed in seed_list:
+
+        def build(seed: int):
             image = self.pipe.text2img(
                 prompt=prompt.positive,
                 negative_prompt=prompt.negative,
@@ -146,11 +165,9 @@ class Forge:
                 expression=character.default_expression, overrides=recorded, seed=seed,
                 guidance=guidance, steps=steps, run_id=run_id,
             )
-            path = run_dir / f"{char_id}_{template}_{seed}.png"
-            save_png(image, path, params)
-            paths.append(path)
-            self._finish_one()
-        return paths
+            return image, params, run_dir / f"{char_id}_{template}_{seed}.png"
+
+        return self._run(seed_list, run_dir, build, on_image)
 
     # --- 表情（inpaint） -----------------------------------------------
 
@@ -168,6 +185,7 @@ class Forge:
         strength: float | None = None,
         guidance: float | None = None,
         steps: int | None = None,
+        on_image: Callable[[Path], None] | None = None,
     ) -> list[Path]:
         character = load_character(self.root, char_id)
         style = load_style(self.root, character.style)
@@ -210,8 +228,8 @@ class Forge:
 
         run_id = datetime.now().strftime("%Y%m%d_%H%M%S")
         run_dir = self.out_dir / run_id
-        paths: list[Path] = []
-        for seed in seed_list:
+
+        def build(seed: int):
             generated = self.pipe.inpaint(
                 prompt=prompt.positive,
                 negative_prompt=prompt.negative,
@@ -237,11 +255,9 @@ class Forge:
                 strength=strength,
                 feather=tpl.inpaint_feather,
             )
-            path = run_dir / f"{char_id}_face_{expression}_{seed}.png"
-            save_png(result, path, params)
-            paths.append(path)
-            self._finish_one()
-        return paths
+            return result, params, run_dir / f"{char_id}_face_{expression}_{seed}.png"
+
+        return self._run(seed_list, run_dir, build, on_image)
 
 
 def _git_commit(root: Path) -> str:
@@ -255,8 +271,12 @@ def _git_commit(root: Path) -> str:
         return "unknown"
 
 
-def load(root: str | Path = ".", out_dir: str | Path = DEFAULT_OUT_DIR) -> Forge:
-    """Colab でモデルを読み込む。GPU が要る（サーバーでは動かさない）。"""
+def load(root: str | Path = ".", out_dir: str | Path = DEFAULT_OUT_DIR, low_memory: bool = False) -> Forge:
+    """Colab でモデルを読み込む。GPU が要る（サーバーでは動かさない）。
+
+    low_memory=True にすると、メモリ節約の設定（attention slicing・VAE の分割）を入れる。
+    遅くなるので、メモリ不足で止まったときだけ使う。
+    """
     import diffusers
     import torch
     import transformers
@@ -273,10 +293,11 @@ def load(root: str | Path = ".", out_dir: str | Path = DEFAULT_OUT_DIR) -> Forge
     )
     pipe.scheduler = EulerAncestralDiscreteScheduler.from_config(pipe.scheduler.config)
     pipe = pipe.to("cuda")
-    pipe.enable_attention_slicing()
-    # パイプラインの同名メソッドは廃止予定の警告が出るので vae 側を呼ぶ
-    pipe.vae.enable_slicing()
-    pipe.vae.enable_tiling()
+    if low_memory:
+        pipe.enable_attention_slicing()
+        # パイプラインの同名メソッドは廃止予定の警告が出るので vae 側を呼ぶ
+        pipe.vae.enable_slicing()
+        pipe.vae.enable_tiling()
     torch.backends.cudnn.deterministic = True
     torch.backends.cudnn.benchmark = False
 
@@ -298,6 +319,22 @@ def load(root: str | Path = ".", out_dir: str | Path = DEFAULT_OUT_DIR) -> Forge
         env=env,
         cleanup=torch.cuda.empty_cache,
     )
+
+
+def show_one(path: Path, thumb: int = 512) -> None:
+    """1 枚を縮小して表示し、ファイル名とシードを出す。generate の on_image に渡す。"""
+    from IPython.display import display
+
+    path = Path(path)
+    with Image.open(path) as im:
+        im = im.convert("RGB")
+        im.thumbnail((thumb, thumb), Image.Resampling.LANCZOS)
+    display(im)
+    try:
+        seed = read_params(path).get("seed")
+    except (MissingParamsError, OSError):
+        seed = "不明"
+    print(f"{path.name}  seed={seed}")
 
 
 def show(paths: list[Path], cols: int = 4, thumb: int = 256) -> None:

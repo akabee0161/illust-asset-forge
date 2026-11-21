@@ -21,7 +21,7 @@ def test_notebook_cells_parse():
 def test_notebook_uses_existing_api():
     _, cells = code_cells()
     code = "\n".join(cells)
-    for needle in ("forge.generate(", "forge.inpaint(", "F.show(", "F.load("):
+    for needle in ("forge.generate(", "forge.inpaint(", "on_image=F.show_one", "F.load("):
         assert needle in code
 
 

@@ -269,25 +269,24 @@ def test_overridden_sampling_values_are_recorded_in_overrides(forge, tmp_path):
     assert read_params(p)["overrides"] == {}
 
 
-def test_load_passes_custom_revision_without_v_prefix(monkeypatch, tmp_path):
-    # diffusers は custom_revision を PyPI の版名（"0.42.1"）と比べ、自分で "v" を付ける。
-    # "v0.42.1" を渡すと「存在しない」と止まる
-    captured = {}
+def fake_gpu_libs(monkeypatch):
+    """torch・diffusers・transformers の偽物を入れ、from_pretrained の引数と呼ばれた設定を記録する。"""
+    rec = SimpleNamespace(kwargs={}, calls=[])
 
     class FakeVae:
-        def enable_slicing(self): pass
-        def enable_tiling(self): pass
+        def enable_slicing(self): rec.calls.append("vae_slicing")
+        def enable_tiling(self): rec.calls.append("vae_tiling")
 
     class FakePipeObj:
         scheduler = SimpleNamespace(config={})
         vae = FakeVae()
         def to(self, device): return self
-        def enable_attention_slicing(self): pass
+        def enable_attention_slicing(self): rec.calls.append("attention_slicing")
 
     class FakeSDXL:
         @staticmethod
         def from_pretrained(name, **kw):
-            captured.update(kw)
+            rec.kwargs.update(kw)
             return FakePipeObj()
 
     fake_diffusers = SimpleNamespace(
@@ -304,9 +303,75 @@ def test_load_passes_custom_revision_without_v_prefix(monkeypatch, tmp_path):
     monkeypatch.setitem(sys.modules, "diffusers", fake_diffusers)
     monkeypatch.setitem(sys.modules, "torch", fake_torch)
     monkeypatch.setitem(sys.modules, "transformers", SimpleNamespace(__version__="5.0"))
+    return rec
+
+
+def test_load_passes_custom_revision_without_v_prefix(monkeypatch, tmp_path):
+    # diffusers は custom_revision を PyPI の版名（"0.42.1"）と比べ、自分で "v" を付ける。
+    # "v0.42.1" を渡すと「存在しない」と止まる
+    rec = fake_gpu_libs(monkeypatch)
     from artgen.forge import load
 
     forge = load(tmp_path, tmp_path / "runs")
-    assert captured["custom_revision"] == "0.42.1"
-    assert captured["custom_pipeline"] == "lpw_stable_diffusion_xl"
+    assert rec.kwargs["custom_revision"] == "0.42.1"
+    assert rec.kwargs["custom_pipeline"] == "lpw_stable_diffusion_xl"
     assert forge.env["diffusers"] == "0.42.1" and forge.env["gpu"] == "FakeGPU"
+
+
+def test_load_skips_memory_saving_by_default_for_speed(monkeypatch, tmp_path):
+    rec = fake_gpu_libs(monkeypatch)
+    from artgen.forge import load
+
+    load(tmp_path, tmp_path / "runs")
+    assert "attention_slicing" not in rec.calls and "vae_tiling" not in rec.calls
+
+
+def test_load_low_memory_enables_slicing_and_tiling(monkeypatch, tmp_path):
+    rec = fake_gpu_libs(monkeypatch)
+    from artgen.forge import load
+
+    load(tmp_path, tmp_path / "runs", low_memory=True)
+    assert {"attention_slicing", "vae_slicing", "vae_tiling"} <= set(rec.calls)
+
+
+def test_on_image_called_after_each_saved_image(forge):
+    seen = []
+    paths = forge.generate("c1", "face", seeds=[1, 2], on_image=lambda p: seen.append((p, p.exists())))
+    assert [p for p, _ in seen] == paths
+    assert all(exists for _, exists in seen)  # 保存してから呼ぶ
+
+
+def test_inpaint_calls_on_image(forge, tmp_path):
+    seen = []
+    forge.inpaint("c1", "hurt", make_source(tmp_path), seeds=[1, 2], on_image=seen.append)
+    assert len(seen) == 2
+
+
+def test_interrupt_returns_images_saved_so_far(repo, tmp_path, capsys):
+    class InterruptingPipe(FakePipe):
+        def text2img(self, **kw):
+            if len(self.calls) == 1:
+                raise KeyboardInterrupt
+            return super().text2img(**kw)
+
+    f = Forge(InterruptingPipe(), repo, tmp_path / "runs", lambda s: s, dict(ENV))
+    paths = f.generate("c1", "face", seeds=[1, 2, 3])
+    assert [p.name for p in paths] == ["c1_face_1.png"]
+    assert paths[0].exists()
+    out = capsys.readouterr().out
+    assert "中断" in out and "1 枚" in out
+
+
+def test_show_one_displays_image_and_seed(forge, monkeypatch, capsys):
+    shown = []
+    fake_display = SimpleNamespace(display=lambda obj: shown.append(obj))
+    monkeypatch.setitem(sys.modules, "IPython", SimpleNamespace(display=fake_display))
+    monkeypatch.setitem(sys.modules, "IPython.display", fake_display)
+    from artgen.forge import show_one
+
+    path = forge.generate("c1", "face", seeds=[7])[0]
+    capsys.readouterr()
+    show_one(path, thumb=128)
+    out = capsys.readouterr().out
+    assert len(shown) == 1 and max(shown[0].size) == 128
+    assert "c1_face_7.png" in out and "seed=7" in out
