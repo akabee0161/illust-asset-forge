@@ -1,0 +1,12 @@
+name: ボルグ
+style: color-anime
+subject: [1boy, solo, adult]
+appearance: [mature male, muscular, broad shoulders, square jaw, short hair, brown hair, stubble, brown eyes, thick eyebrows]
+outfit: [grey armor, steel shoulder armor, breastplate, gauntlets]
+items: [large shield, holding shield]
+default_expression: normal
+expressions:
+  normal: [serious, closed mouth]
+  hurt: [pain, clenched teeth, one eye closed, sweat]
+  shout: [shouting, open mouth, v-shaped eyebrows]
+inpaint_box: null

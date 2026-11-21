@@ -1,0 +1,7 @@
+width: 1024
+height: 1024
+prompt: [portrait, face focus, upper body, looking at viewer, front view, simple background, white background]
+negative: [full body, cowboy shot, from side, from behind]
+export_size: 256
+use_items: false
+inpaint: {strength: 0.6, feather: 24}

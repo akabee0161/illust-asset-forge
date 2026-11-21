@@ -1,0 +1,49 @@
+from pathlib import Path
+
+import pytest
+
+from artgen.config import load_character, load_style, load_template
+from artgen.prompt import build_prompt
+
+ROOT = Path(__file__).resolve().parent.parent
+CHARACTER_IDS = sorted(p.parent.name for p in (ROOT / "characters").glob("*/character.yaml"))
+
+
+def test_there_is_at_least_one_character():
+    assert CHARACTER_IDS
+
+
+@pytest.mark.parametrize("char_id", CHARACTER_IDS)
+def test_all_characters_build_for_every_template_and_expression(char_id):
+    character = load_character(ROOT, char_id)
+    style = load_style(ROOT, character.style)
+    for template_name in ("face", "fullbody"):
+        template = load_template(ROOT, template_name)
+        for expression in character.expressions:
+            prompt = build_prompt(style, template, character, expression=expression)
+            assert prompt.positive
+            assert prompt.negative
+
+
+def test_face_template_matches_spec():
+    face = load_template(ROOT, "face")
+    assert (face.width, face.height) == (1024, 1024)
+    assert face.export_size == 256
+    assert face.inpaint_strength is not None and face.inpaint_feather is not None
+    fullbody = load_template(ROOT, "fullbody")
+    assert (fullbody.width, fullbody.height) == (832, 1216)
+    assert fullbody.export_size is None
+    assert fullbody.use_items is True
+
+
+def test_repo_does_not_mention_the_game():
+    forbidden = ("character-tactics", "FACE_PX")
+    skip_dirs = {".git", ".venv", ".superpowers", "docs", "tests", "__pycache__"}
+    for path in ROOT.rglob("*"):
+        if not path.is_file() or skip_dirs & set(path.relative_to(ROOT).parts):
+            continue
+        if path.suffix in {".png", ".pyc"} or path.parent.name.endswith(".egg-info"):
+            continue
+        text = path.read_text(encoding="utf-8", errors="ignore")
+        for word in forbidden:
+            assert word not in text, f"{path.relative_to(ROOT)} に {word} がある"
