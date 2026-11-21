@@ -47,3 +47,11 @@ def test_notebook_load_cell_is_separate_and_skips_if_already_loaded():
     assert "F.load(" not in setup  # 設定を pull し直すだけのときにモデルを読み込まない
     load = next(c for c in cells if "F.load(" in c)
     assert 'in globals()' in load
+
+
+def test_notebook_purges_cached_artgen_modules_before_import():
+    # 実行し直しても古いコードのままになるのを防ぐ。import より前に sys.modules から消す
+    _, cells = code_cells()
+    setup = next(c for c in cells if "from artgen import forge" in c)
+    assert "sys.modules" in setup
+    assert setup.index("sys.modules") < setup.index("from artgen import forge")
