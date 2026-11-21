@@ -23,3 +23,7 @@
 - **GPU を使う部分（`forge.load()` と実際の生成・inpaint）は未確認。** 依頼者が Colab で動かす
 - `requirements-colab.txt` の版（diffusers 0.42.1・transformers 5.22.2・accelerate 1.15.0・safetensors 0.8.0）は、`uv pip install --dry-run --exclude-newer 2026-11-07` で解決できた組み合わせ。Colab 上で互いに動くか、`lpw_stable_diffusion_xl` が `v0.42.1` の版で取れるかは未確認
 - `characters/ally05/character.yaml` の `inpaint_box` は null。顔を採用した後に書く
+
+## 保留している課題
+
+- **Colab で画像のパスを渡す手間（2026-11-21 に依頼者が保留）**: 表情・全身のセルへ進むたびに、Drive にある採用した画像のパスを手で書き換える必要がある。スマホでは Drive の画面でパスをコピーできず、Colab のファイルのパネルも使いにくい。効率的にする方法は未定で、あとで検討する
