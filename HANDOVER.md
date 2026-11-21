@@ -5,12 +5,12 @@
 工程:
 1. 設計（完了）
 2. 実装（設定・プロンプト・書き出し・Colab の入口）（完了）
-3. ボルグ（ally05）で顔・表情・全身絵を試す ← 今ここ
-段階: 実装（7 タスク中 7）
+3. ボルグ（ally05）で顔・表情・全身絵を試す（完了）
+段階: 完了
 次にやること:
-- 依頼者がボルグの設定の下書き（`characters/ally05/character.yaml`）を確認する
-- GitHub にリポジトリを作って push する（依頼者が頼んだら）
-- 依頼者が Colab で準備・顔のセルを試す（表情は `inpaint_box` が要るので顔を採用した後）
+- 書き出した画像（`characters/ally05/` の `face.png`・`face_hurt.png`・`fullbody.png`）をゲーム側へ取り込む（別のリポジトリの作業。依頼者が進める）
+- `shout` の表情は作っていない（依頼者が一旦なしと決めた）。必要になったら Colab の表情のセルで作る
+- 保留している課題（下）を、依頼者が頼んだときに検討する
 
 ## 概要
 
@@ -19,10 +19,11 @@
 ## 状態
 
 - GPU なしで動く部分（設定・プロンプト・PNG の条件・マスク・書き出し・`forge.py` の偽パイプラインでのテスト）は pytest で確かめ済み
-- ブランチ全体の最終レビュー済み。Critical 1・Important 4・Minor 7 をすべて直した（23790c5）
-- **GPU を使う部分（`forge.load()` と実際の生成・inpaint）は未確認。** 依頼者が Colab で動かす
-- `requirements-colab.txt` の版（diffusers 0.42.1・transformers 5.22.2・accelerate 1.15.0・safetensors 0.8.0）は、`uv pip install --dry-run --exclude-newer 2026-11-07` で解決できた組み合わせ。Colab 上で互いに動くか、`lpw_stable_diffusion_xl` が `v0.42.1` の版で取れるかは未確認
-- ボルグの顔（face）は採用済み。`characters/ally05/` に書き出しと `inpaint_box: [440, 170, 820, 600]` がある（表情を作って、範囲が適切か確かめる）
+- ブランチ全体の最終レビュー済み。Critical 1・Important 4・Minor 7 をすべて直した
+- Colab で、モデルの読み込み・顔の生成・inpaint（表情）・全身の生成が動くことを、依頼者が確かめた（2026-11-21）。1 枚あたり、顔・全身は約 20 秒、表情は約 11 秒（T4）
+- `requirements-colab.txt` の版は、diffusers 0.42.1・transformers 5.22.2・accelerate 1.15.0・safetensors 0.8.0。Colab で動いた
+- ボルグ（`characters/ally05/`）: 顔（シード 1630744298）・表情 `hurt`（シード 135213639）・全身（シード 4074111561）を採用して書き出し済み。`inpaint_box` は `[440, 170, 820, 600]`
+- 全身の髪の色・髪型・鎧の色は、顔に近づけるタグを `character.yaml` に入れた。髪型は、顔が後ろへ流した形、全身は立ち上がった短髪で、合っていない。鎧は、顔が青みの少ない灰色、全身は青みのある鋼色と金色の装飾が多く、合っていない。依頼者は「概ね合っている」と判断して採用した
 
 ## 保留している課題
 
