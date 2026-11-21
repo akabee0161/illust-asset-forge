@@ -19,6 +19,7 @@
 ## 状態
 
 - GPU なしで動く部分（設定・プロンプト・PNG の条件・マスク・書き出し・`forge.py` の偽パイプラインでのテスト）は pytest で確かめ済み
+- ブランチ全体の最終レビュー済み。Critical 1・Important 4・Minor 7 をすべて直した（23790c5）
 - **GPU を使う部分（`forge.load()` と実際の生成・inpaint）は未確認。** 依頼者が Colab で動かす
 - `requirements-colab.txt` の版（diffusers 0.42.1・transformers 5.22.2・accelerate 1.15.0・safetensors 0.8.0）は、`uv pip install --dry-run --exclude-newer 2026-11-07` で解決できた組み合わせ。Colab 上で互いに動くか、`lpw_stable_diffusion_xl` が `v0.42.1` の版で取れるかは未確認
 - `characters/ally05/character.yaml` の `inpaint_box` は null。顔を採用した後に書く
