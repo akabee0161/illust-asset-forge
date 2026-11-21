@@ -1,0 +1,150 @@
+from pathlib import Path
+
+import pytest
+
+from artgen.config import (
+    ConfigError,
+    load_character,
+    load_style,
+    load_template,
+)
+
+CHARACTER_YAML = """\
+name: ボルグ
+style: color-anime
+subject: [1boy, solo]
+appearance: [brown hair]
+outfit: [armor]
+default_expression: normal
+expressions:
+  normal: [serious]
+  hurt: [pain]
+inpaint_box: null
+"""
+
+TEMPLATE_YAML = """\
+width: 1024
+height: 1024
+prompt: [portrait]
+negative: [full body]
+export_size: 256
+"""
+
+
+def write(root: Path, rel: str, text: str) -> None:
+    path = root / rel
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(text, encoding="utf-8")
+
+
+def write_character(root: Path, text: str = CHARACTER_YAML, char_id: str = "c1") -> None:
+    write(root, f"characters/{char_id}/character.yaml", text)
+
+
+def test_load_character_reads_all_fields(tmp_path):
+    write_character(tmp_path)
+    c = load_character(tmp_path, "c1")
+    assert c.id == "c1"
+    assert c.name == "ボルグ"
+    assert c.style == "color-anime"
+    assert c.subject == ["1boy", "solo"]
+    assert c.appearance == ["brown hair"]
+    assert c.outfit == ["armor"]
+    assert c.default_expression == "normal"
+    assert c.expressions["hurt"] == ["pain"]
+    assert c.inpaint_box is None
+    assert c.items == []
+    assert c.negative == []
+
+
+def test_load_character_reads_inpaint_box(tmp_path):
+    write_character(tmp_path, CHARACTER_YAML.replace("inpaint_box: null", "inpaint_box: [1, 2, 30, 40]"))
+    assert load_character(tmp_path, "c1").inpaint_box == (1, 2, 30, 40)
+
+
+def test_load_template_defaults(tmp_path):
+    write(tmp_path, "templates/face.yaml", TEMPLATE_YAML)
+    t = load_template(tmp_path, "face")
+    assert t.width == 1024 and t.height == 1024
+    assert t.export_size == 256
+    assert t.steps == 28
+    assert t.guidance == 5
+    assert t.use_items is False
+    assert t.inpaint_strength is None
+    assert t.inpaint_feather is None
+
+
+def test_load_template_inpaint_and_null_export(tmp_path):
+    write(
+        tmp_path,
+        "templates/face.yaml",
+        TEMPLATE_YAML.replace("export_size: 256", "export_size: null")
+        + "inpaint: {strength: 0.6, feather: 24}\nuse_items: true\n",
+    )
+    t = load_template(tmp_path, "face")
+    assert t.export_size is None
+    assert t.inpaint_strength == 0.6
+    assert t.inpaint_feather == 24
+    assert t.use_items is True
+
+
+def test_load_style(tmp_path):
+    write(tmp_path, "styles/s.yaml", "prompt: [masterpiece]\nnegative: [lowres]\n")
+    s = load_style(tmp_path, "s")
+    assert s.name == "s"
+    assert s.prompt == ["masterpiece"]
+    assert s.negative == ["lowres"]
+
+
+def test_missing_file_names_path(tmp_path):
+    with pytest.raises(ConfigError) as e:
+        load_character(tmp_path, "nobody")
+    assert "characters/nobody/character.yaml" in str(e.value)
+
+
+def test_tags_must_be_list_of_strings(tmp_path):
+    write_character(tmp_path, CHARACTER_YAML.replace("hurt: [pain]", 'hurt: "pain"'))
+    with pytest.raises(ConfigError) as e:
+        load_character(tmp_path, "c1")
+    assert "expressions.hurt" in str(e.value)
+    assert "characters/c1/character.yaml" in str(e.value)
+
+
+def test_default_expression_must_exist(tmp_path):
+    write_character(tmp_path, CHARACTER_YAML.replace("default_expression: normal", "default_expression: smile"))
+    with pytest.raises(ConfigError) as e:
+        load_character(tmp_path, "c1")
+    msg = str(e.value)
+    assert "default_expression" in msg
+    assert "normal" in msg and "hurt" in msg
+
+
+@pytest.mark.parametrize("box", ["[10, 10, 5, 20]", "[1, 2, 3]"])
+def test_inpaint_box_shape(tmp_path, box):
+    write_character(tmp_path, CHARACTER_YAML.replace("inpaint_box: null", f"inpaint_box: {box}"))
+    with pytest.raises(ConfigError) as e:
+        load_character(tmp_path, "c1")
+    assert "inpaint_box" in str(e.value)
+
+
+def test_missing_required_key(tmp_path):
+    write_character(tmp_path, CHARACTER_YAML.replace("style: color-anime\n", ""))
+    with pytest.raises(ConfigError) as e:
+        load_character(tmp_path, "c1")
+    assert "style" in str(e.value)
+
+
+def test_invalid_yaml_and_non_mapping(tmp_path):
+    write_character(tmp_path, "- just\n- a list\n")
+    with pytest.raises(ConfigError):
+        load_character(tmp_path, "c1")
+    write_character(tmp_path, "name: [unclosed\n")
+    with pytest.raises(ConfigError):
+        load_character(tmp_path, "c1")
+
+
+def test_template_size_must_be_positive_int(tmp_path):
+    write(tmp_path, "templates/face.yaml", TEMPLATE_YAML.replace("width: 1024", "width: wide"))
+    with pytest.raises(ConfigError) as e:
+        load_template(tmp_path, "face")
+    assert "width" in str(e.value)
