@@ -266,7 +266,8 @@ def load(root: str | Path = ".", out_dir: str | Path = DEFAULT_OUT_DIR) -> Forge
         MODEL_NAME,
         torch_dtype=torch.float16,
         custom_pipeline="lpw_stable_diffusion_xl",
-        custom_revision=f"v{diffusers.__version__}",
+        # PyPI の版名で渡す（diffusers が自分で "v" を付ける。"v0.42.1" だと存在しないと止まる）
+        custom_revision=diffusers.__version__,
         use_safetensors=True,
         add_watermarker=False,
     )

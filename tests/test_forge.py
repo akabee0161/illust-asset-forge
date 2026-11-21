@@ -267,3 +267,46 @@ def test_overridden_sampling_values_are_recorded_in_overrides(forge, tmp_path):
     assert read_params(p)["overrides"] == {"strength": 0.4}
     p = forge.generate("c1", "face", seeds=[1])[0]
     assert read_params(p)["overrides"] == {}
+
+
+def test_load_passes_custom_revision_without_v_prefix(monkeypatch, tmp_path):
+    # diffusers は custom_revision を PyPI の版名（"0.42.1"）と比べ、自分で "v" を付ける。
+    # "v0.42.1" を渡すと「存在しない」と止まる
+    captured = {}
+
+    class FakeVae:
+        def enable_slicing(self): pass
+        def enable_tiling(self): pass
+
+    class FakePipeObj:
+        scheduler = SimpleNamespace(config={})
+        vae = FakeVae()
+        def to(self, device): return self
+        def enable_attention_slicing(self): pass
+
+    class FakeSDXL:
+        @staticmethod
+        def from_pretrained(name, **kw):
+            captured.update(kw)
+            return FakePipeObj()
+
+    fake_diffusers = SimpleNamespace(
+        __version__="0.42.1",
+        StableDiffusionXLPipeline=FakeSDXL,
+        EulerAncestralDiscreteScheduler=SimpleNamespace(from_config=lambda c: "sched"),
+    )
+    fake_torch = SimpleNamespace(
+        __version__="2.0", float16="fp16",
+        backends=SimpleNamespace(cudnn=SimpleNamespace(deterministic=False, benchmark=True)),
+        cuda=SimpleNamespace(get_device_name=lambda i: "FakeGPU", empty_cache=lambda: None),
+        Generator=lambda: SimpleNamespace(manual_seed=lambda s: ("gen", s)),
+    )
+    monkeypatch.setitem(sys.modules, "diffusers", fake_diffusers)
+    monkeypatch.setitem(sys.modules, "torch", fake_torch)
+    monkeypatch.setitem(sys.modules, "transformers", SimpleNamespace(__version__="5.0"))
+    from artgen.forge import load
+
+    forge = load(tmp_path, tmp_path / "runs")
+    assert captured["custom_revision"] == "0.42.1"
+    assert captured["custom_pipeline"] == "lpw_stable_diffusion_xl"
+    assert forge.env["diffusers"] == "0.42.1" and forge.env["gpu"] == "FakeGPU"
