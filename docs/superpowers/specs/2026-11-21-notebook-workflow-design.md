@@ -1,0 +1,155 @@
+# ノートブックで完結する作業フロー・顔の構図・画風の見比べ 設計書
+
+作成: 2026-11-21。作成時点のログで、後から更新しない。最新の状態は `README.md`・`CLAUDE.md`。
+
+## 1. 目的と背景
+
+ボルグ（`ally05`）を 1 体作って、次の手間と不満が分かった。
+
+- **顔を採用するたびに、Claude のコミットと push を待たないと次へ進めない。** 表情の inpaint に要る `inpaint_box` を Claude が採用した顔を見て `character.yaml` に書き、Colab は YAML を GitHub から読むため。さらに表情・全身のセルでは、Drive 上の採用した画像のパスを毎回手で書き換える。スマホではパスを調べにくい
+- **顔の構図**: 肩・鎧が大きく写り、顔が小さい。顔が右上に寄って頭のてっぺんが切れる
+- **画風**: 今の `color-anime` から変えたい。どう変えたいかは言葉にしにくい
+- 複数のキャラクターの顔を、まとめて作りたい
+
+依頼者が決めたこと:
+
+- 生成・選択・表情・全身まで、**ノートブックの中で済ませる**。採用した絵は Drive の決まった場所にまとまれば一旦よい。最後に、確定した絵だけをリポジトリにコミットする
+- 顔は**常に左を向いた**顔グラフィックにする（依頼者が見せた手本は、向きだけの参考。タッチの手本ではない）
+- 写り方は、頭から胸まで（手本の顔グラフィックくらい）。頭だけまでは寄せない
+- 画風は、候補を並べて見比べて選ぶ。依頼者が以前作った白黒の漫画の線画のプロンプトは、**やり方（シードを固定してプロンプトだけ変える）**を参考にする
+- 選び方は、ボタンで選ぶ（下の 4 の案 A）。ボタンが崩れたときのために、同じ仕組みの関数も残す
+
+## 2. ゴール・ゴールでないこと
+
+ゴール:
+
+- 顔を採用した後、Claude を待たずに、同じノートブックの中で表情・全身へ進める
+- パスを手で書き換える場面をなくす
+- 複数のキャラクターの顔を 1 回の実行で作り、キャラクターごとに選べる
+- 顔が左向き・頭から胸までの構図で出やすくなる
+- 同じキャラクター・同じシードで、画風だけを変えた絵を並べて選べる
+
+ゴールでないこと:
+
+- Colab から GitHub へ push する（依頼者に鍵を登録してもらう必要があるので、今回はしない）
+- 新しいキャラクターの `character.yaml` をノートブックで作る（今まで通り Claude が書き、事前に push する）
+- 顔の自動検出（`CLAUDE.md` の決まり。枠は人が見て決める）
+
+失敗とみなすこと（動いても困ること）:
+
+- スマホでボタンが押せず、結局コードを打たないと進めない
+- 採用した絵と、記録した条件（シード・反転・上書き）が食い違い、作り直せない
+- 顔を採用し直したのに、古い顔から作った表情が残り、気付かず混ざる
+
+## 3. 制約
+
+- GPU を使う処理は Colab（T4）でしか動かない。サーバーでは偽のパイプラインでテストする
+- `diffusers`・`torch` は `forge.load()` の中でだけ import する。`ipywidgets`・`IPython` も、選ぶ画面の関数の中でだけ import し、テストでは偽物に差し替えられる作りにする
+- Colab は GitHub の既定ブランチ（main）を clone する
+- Colab のカーネルは使い回される。準備のセルを実行し直しても、`forge` オブジェクトは古いクラスのまま残る
+- 設定の誤りは `ConfigError`（`<相対パス>: <キーの位置>: <何がおかしいか>`）
+- 書き出しの決まり（顔は正方形で生成し `export_size` に縮める）は変えない
+
+## 4. 方式の比較（選ぶ部分）
+
+| 案 | 中身 | 良い点 | 弱い点 |
+|---|---|---|---|
+| **A（採用）** | 候補の下に [採用] [左右反転して採用] のボタンを出す。採用した絵は Drive の決まった場所へ | スマホでタップだけで進む | Colab のスマホ表示でボタンが崩れることがある |
+| B | `forge.adopt("ally05", "face", 3, flip=True)` を 1 行書く | 単純で壊れにくい | スマホでカッコ・引用符を打つ |
+| C | Drive で採用する絵をフォルダへ手で移す | 作るものが無い | スマホの Drive が使いにくいという今の不満そのもの |
+
+A を採り、B の関数を同じ仕組みの土台として残す（ボタンは B の関数を呼ぶだけ）。
+
+選ぶ画面と B の関数の対象（Claude の判断）:
+
+- 生成のセルは、できた候補の下にそのまま選ぶ画面を出す
+- 別のセルで、`runs/` の過去の実行を開き直せるようにする（既定は最新の run、`run_id` を渡すとその run）。中断・ランタイムの切断・`n=16` で作って後から見る場合に使う。Colab ではセルの実行中にボタンが効かないので、生成が終わってから選ぶ
+- B の関数は、候補を番号ではなくファイル名かシードで指定する（`forge.adopt("ally05_face_1630744298.png", flip=True)` など）。番号は一覧の作り方で変わるため
+
+最後のコミットは、ノートブックで `selected/` を zip にして依頼者が Claude に 1 回添付する。Colab から直接 push する案は、鍵の登録が要るので外した。
+
+## 5. 決まった作り
+
+### 5.1 採用した絵の置き場（Drive）
+
+```
+illust-asset-forge/
+  runs/<run_id>/...                 # 候補（今まで通り）
+  selected/<id>/face.png            # 採用した顔（反転したなら反転済み）
+  selected/<id>/face_<表情>.png
+  selected/<id>/fullbody.png
+  selected/<id>/selection.json      # inpaint_box など、絵の外の決めごと
+  packs/selected_<日時>.zip         # 最後に Claude へ渡す zip
+```
+
+- ファイル名はリポジトリの `characters/<id>/source/` と同じにする。zip を展開すればそのまま `source/` に置ける
+- 採用した PNG には、元の候補の条件をそのまま入れ、`flipped`（true/false）を足す。作り直すときは、同じシードで生成して反転すれば同じ絵になる
+- 採用は上書き。同じ名前を採用し直すと前の絵は置き換わる
+
+### 5.2 左向きと反転
+
+- 型 `face` のプロンプトを、横向き（左向きを狙う）・頭から胸までの構図に変える。具体的なタグは 6 に残す
+- 生成した絵の向きはタグで揃い切らない前提で、右を向いた絵は [左右反転して採用] で左向きにする
+- 反転は採用のときだけ。候補（`runs/`）は生成したまま残す
+
+### 5.3 表情を描き直す範囲（inpaint_box）
+
+- 型 `face` に既定の枠（1024 の座標）を持たせる。構図を揃えるので、顔の位置はおおむね決まる
+- 顔を採用した後、範囲を決めるセルで、採用した顔に赤枠を重ねて表示し、スライダー（x0・y0・x1・y1）で動かす。[この範囲で決める] で `selection.json` に保存する
+- `forge.inpaint` の範囲は、`selection.json` → `character.yaml` の `inpaint_box` → 型の既定の枠、の順に先にあるものを使う。どれを使ったかを出力し、PNG の条件にも残す（今まで通り `inpaint_box` を記録）
+- `forge.inpaint` の `source` は省略できるようにし、省略時は `selected/<id>/face.png` を使う。パスを渡す使い方も残す
+
+### 5.4 顔を採用し直したとき
+
+- 既に `selected/<id>/` に表情（`face_<表情>.png`）や `selection.json` があるときに顔を採用し直すと、それらは古い顔から作ったものになる
+- その場合、古い表情と `selection.json` を `selected/<id>/replaced/<日時>/` へ移し、移したことを出力する。消さない
+
+### 5.5 複数のキャラクター
+
+- `forge.generate` の第 1 引数に、キャラクターの ID の一覧も渡せるようにする（`forge.generate(["ally05", "ally06"], "face", n=4)`）。1 つの `run_id` のフォルダに全員分を作る
+- 選ぶ画面は、キャラクターごとにまとめて表示し、キャラクターごとに採用できる
+- キャラクターの順に n 枚ずつ作る（1 人目が全部できてから 2 人目）。■ で止めても、できた分は残る
+
+### 5.6 画風の見比べ
+
+- `styles/` に画風の候補を数種類足す。依頼者の白黒の漫画の線画のプロンプトも、候補の 1 つとして入れる。元のプロンプトは依頼者のノートブック（2026-11-21 にチャットで受け取った。リポジトリには無い）の次のもの:
+  - prompt: `masterpiece, monochrome manga style, ink lineart, crosshatching shading, hatching texture on cheeks, thin eyelid line, single eye highlight, simple pupil, calm expression, subtle emotion, straight blunt bangs, black hair, thin eyebrows close to eyes, minimal nose, small mouth, soft round shoulders, no muscle definition, slender soft silhouette, simple hand fingers, screentone shading, traditional manga linework, masterpiece, high score, great score, absurdres`
+  - negative: `glossy eyes, multiple sparkly highlights, rainbow eyes, vivid saturated colors, airbrush smooth shading, 3D rendering, exaggerated chibi proportions, big head, thick muscle, glossy lips, photorealistic skin texture, heavy makeup`
+  - 画風の層に入れるのは、線・陰影・目の描き方などのタッチのタグだけ。髪（`straight blunt bangs, black hair`）・体つき（`soft round shoulders` など）・表情（`calm expression`）のようなキャラクター固有のタグは外す（Claude の判断）
+- `forge.compare_styles("ally05", "face", styles=[...], seeds=[...])`: 同じキャラクター・同じシードで、画風ごとに 1 枚ずつ作り、行＝画風・列＝シードの一覧で見せる。画風の名前を省略すると `styles/` の全部
+- `forge.generate`・`forge.inpaint` に `style=` の引数を足し、キャラクターの設定の画風をその場で差し替えられるようにする。差し替えは `overrides` に記録し、最後に Claude が `character.yaml` に戻す
+- 表情・全身で `style=` を省略したときは、`selected/<id>/face.png` があればその条件の画風を引き継ぎ、どの画風を使ったかを出力する。顔と表情・全身の画風が食い違うのを防ぐため（Claude の判断）
+- 画風を選ぶ画面に採用ボタンは付けない。気に入った画風の名前を、生成のセルの `style=` に書く
+
+### 5.7 古いコードが残る問題
+
+- モデルの読み込みのセルは、パイプライン（重い部分）だけを保持する。準備のセルを実行し直すたびに、新しいコードの `Forge` を、保持しているパイプラインで作り直す。モデルは読み込み直さない
+
+### 5.8 最後の受け渡し
+
+- `forge.pack(["ally05", ...])`（省略時は `selected/` の全員）で `selected/<id>/`（`replaced/` を除く）を zip にし、Drive の `packs/` に置く。Colab の `files.download` でダウンロードも試みる（スマホで失敗しても Drive から取れる）
+- Claude 側には、zip を受け取って処理するコマンドを足す（`python -m artgen.intake <zip>`）。zip を `characters/<id>/source/` に展開し、各 PNG の条件を確かめ、`overrides`・`style` の差し替え・`selection.json` の `inpaint_box` のうち、`character.yaml` に戻す必要があるものを一覧にして出す。YAML への書き戻しは今まで通り Claude が判断して行う。その後 `python -m artgen.export <id>` で書き出す
+- `intake` は、zip に入っているキャラクターごとに `characters/<id>/source/` を**丸ごと置き換える**。古い顔から作った表情が `source/` に残り、`export` で混ざるのを防ぐため。消えたファイルの名前を出力する。消したものは git の履歴から戻せる（Claude の判断）
+- `source/` に入る PNG の名前は今と同じなので、`export` は変えない（`flipped` などのキーが増えるだけ）
+
+### 5.9 ノートブックの流れ（新）
+
+1. 準備（Drive・clone/pull・ライブラリ・`Forge` の作り直し）
+2. モデルの読み込み（無いときだけ）
+3. 画風の見比べ（任意）
+4. 顔: キャラクターの一覧で生成 → ボタンで採用
+5. 表情の範囲: キャラクターごとに赤枠とスライダーで決める
+6. 表情: `source` を書かずに生成 → ボタンで採用
+7. 全身: 生成 → ボタンで採用
+8. まとめ: zip にして Claude に渡す
+
+各セルで書き換えるのは、キャラクターの ID・枚数・表情名・画風名だけにする。
+
+## 6. 作る人に任せること
+
+- 型 `face` の新しいタグ（横向き・頭から胸まで・頭が切れないもの）と既定の枠の値。依頼者が Colab で試して調整する前提で、初期値を入れる
+- 画風の候補の数と中身（4〜6 種類程度）
+- 選ぶ画面の見た目（サムネイルの大きさ、ボタンの並び）。スマホの幅で崩れないこと
+- 関数名・引数名（上に書いた名前は案）
+- `intake` の出力の形
+- README・CLAUDE.md の更新（`inpaint_box` を Claude が決める、パスを書き換える、などの記述を新しい流れに直す）
