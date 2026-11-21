@@ -5,7 +5,7 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass, field
 
-from artgen.config import Character, ConfigError, Style, Template
+from artgen.config import Character, ConfigError, Style, Template, has_unbalanced_parens
 
 _OPEN, _CLOSE = "([", ")]"
 _WEIGHT = re.compile(r":\s*-?\d+(?:\.\d+)?$")
@@ -57,11 +57,18 @@ class Overrides:
         extra_negative: str | list[str] = "",
         remove_negative: str | list[str] = "",
     ) -> "Overrides":
+        def checked(name: str, value: str | list[str]) -> list[str]:
+            tags = split_tags(value)
+            for tag in tags:
+                if has_unbalanced_parens(tag):
+                    raise ConfigError(f"{name}: タグ {tag!r} のカッコの対応が取れない")
+            return tags
+
         return cls(
-            extra=split_tags(extra),
-            remove=split_tags(remove),
-            extra_negative=split_tags(extra_negative),
-            remove_negative=split_tags(remove_negative),
+            extra=checked("extra", extra),
+            remove=checked("remove", remove),
+            extra_negative=checked("extra_negative", extra_negative),
+            remove_negative=checked("remove_negative", remove_negative),
         )
 
     def is_empty(self) -> bool:
@@ -83,13 +90,20 @@ class Prompt:
     negative: str
 
 
-def _clean(tags: list[str], remove: list[str]) -> list[str]:
+def _merge(head: list[str], extra: list[str], tail: list[str], remove: list[str]) -> list[str]:
+    """設定のタグ（head・tail）に、引数のタグ（extra）を head と tail の間に挟む。
+
+    remove は設定のタグにだけ効く。extra と同じ名前の設定のタグは extra に置き換わる
+    （重みを変えられる）。それ以外の同じ名前は最初の 1 つだけ残す。
+    """
     removed = {tag_key(t) for t in remove}
+    replaced = {tag_key(t) for t in extra}
+    config = lambda tags: [t for t in tags if tag_key(t) not in removed | replaced]
     seen: set[str] = set()
     out: list[str] = []
-    for tag in tags:
+    for tag in [*config(head), *extra, *config(tail)]:
         key = tag_key(tag)
-        if key in removed or key in seen:
+        if key in seen:
             continue
         seen.add(key)
         out.append(tag)
@@ -111,23 +125,16 @@ def build_prompt(
             f"表情 {name!r} が無い（既知: {known}）"
         )
 
-    positive = [
+    head = [
         *character.subject,
         *character.appearance,
         *character.outfit,
         *(character.items if template.use_items else []),
         *template.prompt,
         *character.expressions[name],
-        *overrides.extra,
-        *style.prompt,
     ]
-    negative = [
-        *style.negative,
-        *template.negative,
-        *character.negative,
-        *overrides.extra_negative,
-    ]
+    negative = [*style.negative, *template.negative, *character.negative]
     return Prompt(
-        positive=", ".join(_clean(positive, overrides.remove)),
-        negative=", ".join(_clean(negative, overrides.remove_negative)),
+        positive=", ".join(_merge(head, overrides.extra, style.prompt, overrides.remove)),
+        negative=", ".join(_merge(negative, overrides.extra_negative, [], overrides.remove_negative)),
     )

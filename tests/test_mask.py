@@ -51,3 +51,13 @@ def test_feather_larger_than_box_is_rejected():
 def test_feather_composite_size_mismatch():
     with pytest.raises(ValueError):
         feather_composite(Image.new("RGB", (10, 10)), Image.new("RGB", (20, 20)), (1, 1, 5, 5), 2)
+
+
+def test_check_feather_rejects_too_large_for_box():
+    from artgen.mask import check_feather
+
+    check_feather((100, 100, 300, 300), 24)
+    check_feather((0, 0, 10, 10), 0)
+    for box in [(100, 100, 140, 300), (100, 100, 300, 140), (0, 0, 48, 48)]:
+        with pytest.raises(ConfigError):
+            check_feather(box, 24)

@@ -15,7 +15,7 @@ from typing import Any, Callable
 from PIL import Image
 
 from artgen.config import ConfigError, load_character, load_style, load_template
-from artgen.mask import check_box, feather_composite, make_mask
+from artgen.mask import check_box, check_feather, feather_composite, make_mask
 from artgen.pnginfo import MissingParamsError, read_params, save_png
 from artgen.prompt import Overrides, build_prompt
 
@@ -60,6 +60,22 @@ class Forge:
                 raise ConfigError(f"seeds: 0〜{MAX_SEED} の整数でない: {s!r}")
         return seeds
 
+    @staticmethod
+    def _check_sampling(guidance: float, steps: int, strength: float | None = None) -> None:
+        if isinstance(guidance, bool) or not isinstance(guidance, (int, float)) or guidance <= 0:
+            raise ConfigError(f"guidance: 0 より大きい数でない: {guidance!r}")
+        if isinstance(steps, bool) or not isinstance(steps, int) or steps < 1:
+            raise ConfigError(f"steps: 1 以上の整数でない: {steps!r}")
+        if strength is not None and (
+            isinstance(strength, bool) or not isinstance(strength, (int, float)) or not 0 < strength <= 1
+        ):
+            raise ConfigError(f"strength: 0 より大きく 1 以下の数でない: {strength!r}")
+
+    @staticmethod
+    def _recorded_overrides(overrides: Overrides, **values) -> dict:
+        """タグの上書きに、引数で変えた数値（None でないもの）を足して記録する。"""
+        return {**overrides.to_dict(), **{k: v for k, v in values.items() if v is not None}}
+
     def _base_params(self, *, prompt, template, style, character, expression, overrides, seed,
                      guidance, steps, run_id) -> dict:
         return {
@@ -77,7 +93,7 @@ class Forge:
             "template": template.name,
             "style": style.name,
             "expression": expression,
-            "overrides": overrides.to_dict(),
+            "overrides": overrides,
             **self.env,
         }
 
@@ -105,8 +121,10 @@ class Forge:
         tpl = load_template(self.root, template)
         overrides = Overrides.from_args(extra, remove, extra_negative, remove_negative)
         prompt = build_prompt(style, tpl, character, overrides=overrides)
+        recorded = self._recorded_overrides(overrides, guidance=guidance, steps=steps)
         guidance = tpl.guidance if guidance is None else guidance
         steps = tpl.steps if steps is None else steps
+        self._check_sampling(guidance, steps)
         seed_list = self._seeds(n, seeds)
 
         run_id = datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -125,7 +143,7 @@ class Forge:
             ).images[0]
             params = self._base_params(
                 prompt=prompt, template=tpl, style=style, character=character,
-                expression=character.default_expression, overrides=overrides, seed=seed,
+                expression=character.default_expression, overrides=recorded, seed=seed,
                 guidance=guidance, steps=steps, run_id=run_id,
             )
             path = run_dir / f"{char_id}_{template}_{seed}.png"
@@ -176,12 +194,18 @@ class Forge:
                 f"（必要: {tpl.width}x{tpl.height}）"
             )
         box = character.inpaint_box
-        check_box(box, original.size)
+        try:
+            check_box(box, original.size)
+            check_feather(box, tpl.inpaint_feather)
+        except ConfigError as e:
+            raise ConfigError(f"characters/{char_id}/character.yaml: {e}") from e
         mask = make_mask(original.size, box)
 
+        recorded = self._recorded_overrides(overrides, strength=strength, guidance=guidance, steps=steps)
         strength = tpl.inpaint_strength if strength is None else strength
         guidance = tpl.guidance if guidance is None else guidance
         steps = tpl.steps if steps is None else steps
+        self._check_sampling(guidance, steps, strength)
         seed_list = self._seeds(n, seeds)
 
         run_id = datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -204,7 +228,7 @@ class Forge:
             result = feather_composite(original, generated, box, tpl.inpaint_feather)
             params = self._base_params(
                 prompt=prompt, template=tpl, style=style, character=character,
-                expression=expression, overrides=overrides, seed=seed,
+                expression=expression, overrides=recorded, seed=seed,
                 guidance=guidance, steps=steps, run_id=run_id,
             )
             params.update(

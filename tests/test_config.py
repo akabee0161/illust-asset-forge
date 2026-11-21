@@ -148,3 +148,16 @@ def test_template_size_must_be_positive_int(tmp_path):
     with pytest.raises(ConfigError) as e:
         load_template(tmp_path, "face")
     assert "width" in str(e.value)
+
+
+def test_unbalanced_parens_in_tag_is_rejected_with_quoting_hint(tmp_path):
+    # YAML の flow list では、カンマを含む重み付きタグが黙って割れる
+    write_character(tmp_path, CHARACTER_YAML.replace("appearance: [brown hair]", "appearance: [(a, b:1.1)]"))
+    with pytest.raises(ConfigError) as e:
+        load_character(tmp_path, "c1")
+    assert "appearance" in str(e.value) and "カッコ" in str(e.value) and "引用符" in str(e.value)
+
+
+def test_quoted_weighted_tag_with_comma_is_accepted(tmp_path):
+    write_character(tmp_path, CHARACTER_YAML.replace("appearance: [brown hair]", 'appearance: ["(a, b:1.1)"]'))
+    assert load_character(tmp_path, "c1").appearance == ["(a, b:1.1)"]

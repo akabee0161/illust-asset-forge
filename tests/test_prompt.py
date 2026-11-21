@@ -83,12 +83,40 @@ def test_remove_ignores_weight_in_character_tag():
 
 
 def test_weighted_tag_with_comma_survives_notebook_string():
-    style, template, character = make()
-    o = Overrides.from_args(extra="(a, b:1.1), c", remove="(a, b:0.5)")
-    assert o.extra == ["(a, b:1.1)", "c"]
+    style, template, character = make(appearance=("(a, b:0.9)",))
+    o = Overrides.from_args(extra="c, d", remove="(a, b:0.5)")
     p = build_prompt(style, template, character, overrides=o)
-    assert "(a, b:1.1)" not in p.positive
-    assert ", c," in p.positive
+    assert "a, b" not in p.positive  # 設定側のタグが、重みを無視して消える
+    assert ", c, d," in p.positive
+    o = Overrides.from_args(extra="(a, b:1.1), c")
+    assert o.extra == ["(a, b:1.1)", "c"]  # カンマで割れない
+
+
+def test_extra_replaces_config_tag_with_new_weight():
+    style, template, character = make(appearance=("stubble",))
+    o = Overrides.from_args(extra="(stubble:1.3)")
+    p = build_prompt(style, template, character, overrides=o)
+    assert "(stubble:1.3)" in p.positive
+    assert p.positive.count("stubble") == 1
+
+
+def test_remove_does_not_remove_extra_of_same_tag():
+    style, template, character = make(appearance=("stubble",))
+    o = Overrides.from_args(extra="(stubble:1.3)", remove="stubble")
+    assert "(stubble:1.3)" in build_prompt(style, template, character, overrides=o).positive
+
+
+def test_extra_negative_replaces_config_negative_weight():
+    style, template, character = make(style_negative=("blurry",))
+    o = Overrides.from_args(extra_negative="(blurry:1.4)")
+    assert build_prompt(style, template, character, overrides=o).negative == "(blurry:1.4)"
+
+
+@pytest.mark.parametrize("bad", ["(scar:1.2, smile, brown hair", "a), b", "[x"])
+def test_unbalanced_override_is_rejected(bad):
+    with pytest.raises(ConfigError) as e:
+        Overrides.from_args(extra=bad)
+    assert "カッコ" in str(e.value)
 
 
 def test_dedupe_by_key_keeps_first():

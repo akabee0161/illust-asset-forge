@@ -53,6 +53,11 @@ class Character:
 _MISSING = object()
 
 
+def has_unbalanced_parens(tag: str) -> bool:
+    """() と [] の対応が取れていないタグか。"""
+    return tag.count("(") != tag.count(")") or tag.count("[") != tag.count("]")
+
+
 class _Reader:
     """1 つの YAML の各キーを検査して取り出す。エラーにはファイルの相対パスを付ける。"""
 
@@ -85,6 +90,12 @@ class _Reader:
     def tag_list(self, where: str, value: Any) -> list[str]:
         if not isinstance(value, list) or not all(isinstance(v, str) for v in value):
             raise self.fail(where, "タグの一覧でない")
+        for tag in value:
+            if has_unbalanced_parens(tag):
+                raise self.fail(
+                    where,
+                    f"タグ {tag!r} のカッコの対応が取れない。カンマを含むタグは引用符で囲む（例: '(a, b:1.1)'）",
+                )
         return list(value)
 
     def string(self, key: str) -> str:

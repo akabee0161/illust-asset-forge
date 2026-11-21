@@ -38,7 +38,8 @@ GPU を使う処理は依頼者が Colab で動かし、GPU を使わない処�
 
 1. `notebooks/run.ipynb` を Colab で開き、ランタイムを GPU（T4）にする
 2. 上から順にセルを実行する
-   - **準備**: Drive をつなぎ、リポジトリを clone（2 回目以降は pull）、ライブラリを入れ、モデルを読み込む
+   - **準備**: Drive をつなぎ、リポジトリを clone（2 回目以降は pull）し、ライブラリを入れる。Claude が設定を直して push した後は、このセルだけ実行し直せば取り込める
+   - **モデルの読み込み**: `forge` が無いときだけ読み込む（数分）
    - **顔**: `forge.generate("ally05", "face", n=8)` で 8 枚作って 1 枚選ぶ
    - **表情**: `forge.inpaint("ally05", "hurt", source=<採用した顔>, n=4)`。`inpaint_box` が要るので、顔を採用して Claude が書いた後に実行する
    - **全身**: `forge.generate("ally05", "fullbody", n=4)`
@@ -48,10 +49,13 @@ GPU を使う処理は依頼者が Colab で動かし、GPU を使わない処�
 
 ```python
 forge.generate("ally05", "face", extra="scar on cheek", remove="stubble")  # タグを足す・消す
+forge.generate("ally05", "face", extra="(stubble:1.3)")  # 設定と同じタグを重み付きで書くと置き換わる（remove は設定のタグにだけ効く）
 forge.generate("ally05", "face", extra_negative="hat", remove_negative="lowres")
 forge.generate("ally05", "face", seeds=[123, 456])  # シードを固定（n は無視される）
-forge.generate("ally05", "face", guidance=6, steps=30)
+forge.generate("ally05", "face", guidance=6, steps=30)  # inpaint は strength も
 ```
+
+YAML のタグにカンマを含む重み付きタグを書くときは、引用符で囲む（`"(a, b:1.1)"`）。囲まないと YAML が黙って割るので、カッコの対応が取れないタグは `ConfigError` で止まる。
 
 **YAML は Colab で書き換えない。** Colab はリポジトリを GitHub から取るので、書き換えは GitHub に戻らず、次の pull でぶつかる。上書きした内容は PNG の条件に `overrides` として残るので、採用した絵を受け取った Claude が設定に戻す。
 

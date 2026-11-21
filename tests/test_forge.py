@@ -105,7 +105,7 @@ def test_overrides_recorded_and_applied(forge, pipe):
     paths = forge.generate("c1", "face", seeds=[1], extra="scar on cheek", guidance=6, steps=20)
     params = read_params(paths[0])
     assert "scar on cheek" in params["prompt"]
-    assert params["overrides"] == {"extra": ["scar on cheek"]}
+    assert params["overrides"] == {"extra": ["scar on cheek"], "guidance": 6, "steps": 20}
     assert params["guidance_scale"] == 6
     assert params["num_inference_steps"] == 20
     assert pipe.calls[0][1]["guidance_scale"] == 6
@@ -228,3 +228,42 @@ def test_show_displays_one_sheet_and_prints_seeds(forge, monkeypatch, capsys):
     assert len(shown) == 1 and shown[0].size == (128, 128)
     out = capsys.readouterr().out
     assert "c1_face_7.png" in out and "seed=9" in out
+
+
+def test_inpaint_rejects_feather_too_large_before_gpu(repo, pipe, tmp_path):
+    write(repo, "characters/c1/character.yaml", CHARACTER.format(box="[100, 100, 140, 300]"))
+    f = Forge(pipe, repo, tmp_path / "runs", lambda s: s, dict(ENV))
+    with pytest.raises(ConfigError):
+        f.inpaint("c1", "hurt", make_source(tmp_path), n=1)
+    assert pipe.calls == []
+
+
+def test_inpaint_box_error_names_the_character_file(repo, pipe, tmp_path):
+    write(repo, "characters/c1/character.yaml", CHARACTER.format(box="[100, 100, 2000, 300]"))
+    f = Forge(pipe, repo, tmp_path / "runs", lambda s: s, dict(ENV))
+    with pytest.raises(ConfigError) as e:
+        f.inpaint("c1", "hurt", make_source(tmp_path), n=1)
+    assert str(e.value).startswith("characters/c1/character.yaml: inpaint_box")
+
+
+@pytest.mark.parametrize("kw", [{"guidance": 0}, {"guidance": -1}, {"steps": 0}, {"steps": 1.5}])
+def test_generate_rejects_bad_sampling_args_before_gpu(forge, pipe, kw):
+    with pytest.raises(ConfigError):
+        forge.generate("c1", "face", seeds=[1], **kw)
+    assert pipe.calls == []
+
+
+@pytest.mark.parametrize("kw", [{"strength": 0}, {"strength": 1.5}, {"steps": 0}, {"guidance": 0}])
+def test_inpaint_rejects_bad_sampling_args_before_gpu(forge, pipe, tmp_path, kw):
+    with pytest.raises(ConfigError):
+        forge.inpaint("c1", "hurt", make_source(tmp_path), seeds=[1], **kw)
+    assert pipe.calls == []
+
+
+def test_overridden_sampling_values_are_recorded_in_overrides(forge, tmp_path):
+    p = forge.generate("c1", "face", seeds=[1], guidance=6, steps=20)[0]
+    assert read_params(p)["overrides"] == {"guidance": 6, "steps": 20}
+    p = forge.inpaint("c1", "hurt", make_source(tmp_path), seeds=[1], strength=0.4)[0]
+    assert read_params(p)["overrides"] == {"strength": 0.4}
+    p = forge.generate("c1", "face", seeds=[1])[0]
+    assert read_params(p)["overrides"] == {}

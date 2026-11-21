@@ -21,6 +21,34 @@ def _accepted_names(expressions: list[str]) -> list[str]:
     return ["face.png", *(f"face_{e}.png" for e in expressions), "fullbody.png"]
 
 
+def _check_matches_name(src: Path, rel_source: str, params: dict, template_name: str, character) -> None:
+    """ファイル名から決まる型・表情と、画像の中身・条件が合っているか。取り違えと縮小を止める。"""
+    where = f"{rel_source}/{src.name}"
+    stem = src.stem
+    if stem == "fullbody":
+        want_template, want_expression = "fullbody", None
+    elif stem == "face":
+        want_template, want_expression = "face", character.default_expression
+    else:
+        want_template, want_expression = "face", stem.removeprefix("face_")
+    if template_name != want_template:
+        raise ExportError(f"{where}: 条件の template が {template_name!r}。この名前には {want_template!r} の絵が要る")
+    if want_expression is not None and params.get("expression", want_expression) != want_expression:
+        raise ExportError(
+            f"{where}: 条件の expression が {params['expression']!r}。この名前には {want_expression!r} の絵が要る"
+        )
+    if params.get("character", character.id) != character.id:
+        raise ExportError(f"{where}: 条件の character が {params['character']!r}（{character.id!r} の絵でない）")
+    w, h = params.get("width"), params.get("height")
+    if isinstance(w, int) and isinstance(h, int):
+        with Image.open(src) as im:
+            if im.size != (w, h):
+                raise ExportError(
+                    f"{where}: 画像が {im.width}x{im.height} で、条件の {w}x{h} と違う。"
+                    "添付で縮められた可能性がある"
+                )
+
+
 def export_character(root: Path, char_id: str) -> list[Path]:
     """`characters/<id>/source/*.png` を `characters/<id>/` に書き出し、params.json を作る。
 
@@ -36,7 +64,8 @@ def export_character(root: Path, char_id: str) -> list[Path]:
 
     if not source_dir.is_dir():
         raise ExportError(f"{rel_source}: フォルダが無い")
-    sources = sorted(p for p in source_dir.iterdir() if p.is_file() and p.suffix == ".png")
+    # 隠しファイル（.DS_Store など）は無視する。それ以外は名前を検査する（face.PNG・jpg も止める）
+    sources = sorted(p for p in source_dir.iterdir() if p.is_file() and not p.name.startswith("."))
     if not sources:
         raise ExportError(f"{rel_source}: PNG が無い")
 
@@ -53,6 +82,7 @@ def export_character(root: Path, char_id: str) -> list[Path]:
         if not isinstance(template_name, str):
             raise ExportError(f"{rel_source}/{src.name}: 条件に template が無い")
         template = load_template(root, template_name)
+        _check_matches_name(src, rel_source, params, template_name, character)
 
         if template.export_size is not None:
             with Image.open(src) as im:
@@ -63,6 +93,12 @@ def export_character(root: Path, char_id: str) -> list[Path]:
                     )
         plans.append((src, char_dir / src.name, template.export_size))
         all_params[src.name] = params
+
+    # 今回の source に無い古い出力は、params.json と食い違うので消す
+    current = {dest.name for _, dest, _ in plans}
+    for name in accepted:
+        if name not in current:
+            (char_dir / name).unlink(missing_ok=True)
 
     written: list[Path] = []
     for src, dest, size in plans:

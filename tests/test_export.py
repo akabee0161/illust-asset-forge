@@ -129,3 +129,66 @@ def test_cli_exit_code(repo, capsys):
     assert main(["c2", "--root", str(repo)]) == 1
     assert "source" in capsys.readouterr().out
     assert main(["nobody", "--root", str(repo)]) == 1
+
+
+def test_rejects_image_whose_template_does_not_match_name(repo):
+    put(repo, "fullbody.png", (1024, 1024), "face")  # face の絵を fullbody と名付けた
+    with pytest.raises(ExportError) as e:
+        export_character(repo, "c1")
+    assert "fullbody.png" in str(e.value) and "template" in str(e.value)
+
+
+def put_full(repo, name, size, **params):
+    save_png(Image.new("RGB", size), repo / "characters/c1/source" / name,
+             {"template": "face", "seed": 1, **params})
+
+
+def test_rejects_expression_mismatch(repo):
+    put_full(repo, "face.png", (1024, 1024), expression="hurt")
+    with pytest.raises(ExportError) as e:
+        export_character(repo, "c1")
+    assert "expression" in str(e.value)
+
+
+def test_accepts_matching_expression(repo):
+    put_full(repo, "face.png", (1024, 1024), expression="normal", character="c1")
+    put_full(repo, "face_hurt.png", (1024, 1024), expression="hurt", character="c1")
+    export_character(repo, "c1")
+
+
+def test_rejects_character_mismatch(repo):
+    put_full(repo, "face.png", (1024, 1024), character="someone-else")
+    with pytest.raises(ExportError) as e:
+        export_character(repo, "c1")
+    assert "character" in str(e.value)
+
+
+def test_rejects_downscaled_attachment(repo):
+    put_full(repo, "face.png", (512, 512), width=1024, height=1024)
+    with pytest.raises(ExportError) as e:
+        export_character(repo, "c1")
+    assert "縮め" in str(e.value)
+
+
+@pytest.mark.parametrize("name", ["face.PNG", "face_hurt.jpg", "notes.txt"])
+def test_rejects_non_png_or_odd_extension(repo, name):
+    put(repo, "face.png", (1024, 1024), "face")
+    (repo / "characters/c1/source" / name).write_bytes(b"x")
+    with pytest.raises(ExportError) as e:
+        export_character(repo, "c1")
+    assert name in str(e.value)
+
+
+def test_hidden_files_in_source_are_ignored(repo):
+    put(repo, "face.png", (1024, 1024), "face")
+    (repo / "characters/c1/source/.DS_Store").write_bytes(b"x")
+    export_character(repo, "c1")
+
+
+def test_stale_outputs_are_removed(repo):
+    put(repo, "face.png", (1024, 1024), "face")
+    stale = repo / "characters/c1/face_hurt.png"
+    Image.new("RGB", (256, 256)).save(stale)
+    export_character(repo, "c1")
+    assert not stale.exists()
+    assert list(json.loads((repo / "characters/c1/params.json").read_text(encoding="utf-8"))) == ["face.png"]

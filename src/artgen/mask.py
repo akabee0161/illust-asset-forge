@@ -19,6 +19,13 @@ def check_box(box: Box, size: tuple[int, int]) -> None:
         )
 
 
+def check_feather(box: Box, feather: int) -> None:
+    """四角を feather だけ内側に縮めても残る大きさか。"""
+    x0, y0, x1, y1 = box
+    if x1 - x0 <= 2 * feather or y1 - y0 <= 2 * feather:
+        raise ConfigError(f"inpaint feather: 四角 {tuple(box)} に対して大きすぎる: {feather}")
+
+
 def make_mask(size: tuple[int, int], box: Box) -> Image.Image:
     """四角の中が 255、外が 0 のモード L のマスク（x1・y1 は含まない）。"""
     x0, y0, x1, y1 = box
@@ -37,10 +44,9 @@ def feather_composite(
     if original.size != generated.size:
         raise ValueError(f"大きさが違う: {original.size} と {generated.size}")
     check_box(box, original.size)
+    check_feather(box, feather)
     x0, y0, x1, y1 = box
     inner = (x0 + feather, y0 + feather, x1 - feather, y1 - feather)
-    if inner[0] >= inner[2] or inner[1] >= inner[3]:
-        raise ConfigError(f"inpaint feather: 四角 {tuple(box)} に対して大きすぎる: {feather}")
     mask = make_mask(original.size, inner)
     if feather > 0:
         mask = mask.filter(ImageFilter.GaussianBlur(feather / 2))

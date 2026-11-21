@@ -31,3 +31,19 @@ def test_notebook_has_no_outputs():
         if c["cell_type"] == "code":
             assert c["outputs"] == []
             assert c["execution_count"] is None
+
+
+def test_notebook_makes_package_importable_in_running_kernel():
+    # pip install -e は動いているカーネルの import に効かないので、src を sys.path に足す
+    _, cells = code_cells()
+    setup = next(c for c in cells if "from artgen import forge" in c)
+    assert "sys.path.insert" in setup
+    assert setup.index("sys.path.insert") < setup.index("from artgen import forge")
+
+
+def test_notebook_load_cell_is_separate_and_skips_if_already_loaded():
+    _, cells = code_cells()
+    setup = next(c for c in cells if "from artgen import forge" in c)
+    assert "F.load(" not in setup  # 設定を pull し直すだけのときにモデルを読み込まない
+    load = next(c for c in cells if "F.load(" in c)
+    assert 'in globals()' in load
