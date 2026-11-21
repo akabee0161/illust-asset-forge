@@ -9,4 +9,4 @@ expressions:
   normal: [serious, closed mouth]
   hurt: [pain, clenched teeth, one eye closed, sweat]
   shout: [shouting, open mouth, v-shaped eyebrows]
-inpaint_box: null
+inpaint_box: [440, 170, 820, 600]

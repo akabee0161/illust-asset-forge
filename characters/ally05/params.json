@@ -1,0 +1,24 @@
+{
+  "face.png": {
+    "character": "ally05",
+    "commit": "1e822c1",
+    "diffusers": "0.42.1",
+    "expression": "normal",
+    "gpu": "Tesla T4",
+    "guidance_scale": 5,
+    "height": 1024,
+    "model": "cagliostrolab/animagine-xl-4.0",
+    "negative_prompt": "monochrome, greyscale, sketch, lowres, bad anatomy, bad hands, text, error, missing finger, extra digits, fewer digits, cropped, worst quality, low quality, low score, bad score, average score, signature, watermark, username, blurry, 3d, realistic, full body, cowboy shot, from side, from behind",
+    "num_inference_steps": 28,
+    "overrides": {},
+    "prompt": "1boy, solo, adult, mature male, muscular, broad shoulders, square jaw, short hair, brown hair, stubble, brown eyes, thick eyebrows, grey armor, steel shoulder armor, breastplate, gauntlets, portrait, face focus, upper body, looking at viewer, front view, simple background, white background, serious, closed mouth, anime coloring, cel shading, clean lineart, safe, masterpiece, high score, great score, absurdres",
+    "run_id": "20261121_052949",
+    "sampler": "Euler a",
+    "seed": 1630744298,
+    "style": "color-anime",
+    "template": "face",
+    "torch": "2.14.1+cu130",
+    "transformers": "5.22.2",
+    "width": 1024
+  }
+}
