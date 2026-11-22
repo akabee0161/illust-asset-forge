@@ -5,6 +5,7 @@ import pytest
 from artgen.config import (
     ConfigError,
     load_character,
+    load_default_style,
     load_style,
     load_template,
 )
@@ -128,10 +129,50 @@ def test_inpaint_box_shape(tmp_path, box):
 
 
 def test_missing_required_key(tmp_path):
-    write_character(tmp_path, CHARACTER_YAML.replace("style: color-anime\n", ""))
+    write_character(tmp_path, CHARACTER_YAML.replace("name: ボルグ\n", ""))
     with pytest.raises(ConfigError) as e:
         load_character(tmp_path, "c1")
-    assert "style" in str(e.value)
+    assert "characters/c1/character.yaml: name: " in str(e.value)
+
+
+NO_STYLE_YAML = CHARACTER_YAML.replace("style: color-anime\n", "")
+
+
+def test_character_without_style_uses_default(tmp_path):
+    write(tmp_path, "defaults.yaml", "style: flat\n")
+    write_character(tmp_path, NO_STYLE_YAML)
+    assert load_character(tmp_path, "c1").style == "flat"
+    assert load_default_style(tmp_path) == "flat"
+
+
+def test_character_style_overrides_default(tmp_path):
+    write(tmp_path, "defaults.yaml", "style: flat\n")
+    write_character(tmp_path)
+    assert load_character(tmp_path, "c1").style == "color-anime"
+
+
+def test_character_without_style_and_no_defaults_fails(tmp_path):
+    write_character(tmp_path, NO_STYLE_YAML)
+    with pytest.raises(ConfigError) as e:
+        load_character(tmp_path, "c1")
+    assert "defaults.yaml" in str(e.value) and "ファイルが無い" in str(e.value)
+
+
+@pytest.mark.parametrize("text", ['style: ""\n', "style: [a]\n", "other: x\n"])
+def test_defaults_style_must_be_string(tmp_path, text):
+    write(tmp_path, "defaults.yaml", text)
+    write_character(tmp_path, NO_STYLE_YAML)
+    with pytest.raises(ConfigError) as e:
+        load_character(tmp_path, "c1")
+    assert str(e.value).startswith("defaults.yaml: style: ")
+
+
+def test_character_style_null_is_rejected(tmp_path):
+    write(tmp_path, "defaults.yaml", "style: flat\n")
+    write_character(tmp_path, CHARACTER_YAML.replace("style: color-anime", "style: null"))
+    with pytest.raises(ConfigError) as e:
+        load_character(tmp_path, "c1")
+    assert "characters/c1/character.yaml: style: " in str(e.value)
 
 
 def test_invalid_yaml_and_non_mapping(tmp_path):

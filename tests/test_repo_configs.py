@@ -1,8 +1,9 @@
 from pathlib import Path
 
 import pytest
+import yaml
 
-from artgen.config import load_character, load_style, load_template
+from artgen.config import load_character, load_default_style, load_style, load_template
 from artgen.mask import check_box, check_feather
 from artgen.prompt import build_prompt
 
@@ -58,6 +59,17 @@ def test_face_template_is_left_facing_bust_with_default_box():
     assert face.inpaint_box is not None
     check_box(face.inpaint_box, (face.width, face.height))
     check_feather(face.inpaint_box, face.inpaint_feather)
+
+
+def test_default_style_exists():
+    assert load_default_style(ROOT) == "thick-line-flat"
+    load_style(ROOT, load_default_style(ROOT))
+
+
+@pytest.mark.parametrize("char_id", CHARACTER_IDS)
+def test_characters_follow_default_style(char_id):
+    data = yaml.safe_load((ROOT / "characters" / char_id / "character.yaml").read_text(encoding="utf-8"))
+    assert "style" not in data
 
 
 def test_style_candidates_exist():
