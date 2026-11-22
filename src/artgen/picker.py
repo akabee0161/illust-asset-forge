@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import html
 import io
 from pathlib import Path
@@ -102,7 +103,9 @@ def edit_box(forge, char_id: str, *, widgets=None, display=None) -> None:
     box, _source = forge.resolve_box(char_id)
     feather = load_template(forge.root, "face").inpaint_feather
     widgets, display = _env(widgets, display)
-    with Image.open(face) as im:
+    face_bytes = face.read_bytes()
+    opened_sha = hashlib.sha256(face_bytes).hexdigest()  # 開いた時の顔。保存の時に同じか確かめる
+    with Image.open(io.BytesIO(face_bytes)) as im:
         base = im.convert("RGB")
 
     limits = (base.width, base.height, base.width, base.height)
@@ -126,6 +129,9 @@ def edit_box(forge, char_id: str, *, widgets=None, display=None) -> None:
     def save(_b):
         b = current()
         try:
+            if not face.is_file() or hashlib.sha256(face.read_bytes()).hexdigest() != opened_sha:
+                _show(result, "決められない: 顔を採用し直したので、この画面を開き直す")
+                return
             check_box(b, base.size)
             check_feather(b, feather)
             forge.selected.save_box(char_id, b)

@@ -239,3 +239,23 @@ def test_result_text_is_html_escaped(forge, fake_widgets, monkeypatch):
     monkeypatch.setattr(forge, "adopt", lambda *a, **k: (_ for _ in ()).throw(ValueError("<b>x</b>")))
     fake_widgets.created("Button")[0].click()
     assert "<b>" not in fake_widgets.created("HTML")[-1].value
+
+
+def test_edit_box_refuses_to_save_after_face_readopted(forge, fake_widgets):
+    cand = forge.generate("c1", "face", seeds=[1])[0]
+    forge.adopt(cand)
+    edit_box(forge, "c1", widgets=fake_widgets, display=noop)
+    forge.adopt(cand, flip=True)  # 画面を開いたまま顔を採用し直した
+    fake_widgets.created("Button")[0].click()
+    assert forge.selected.read_box("c1") is None
+    assert not (forge.selected.selected_dir / "c1" / "selection.json").exists()
+    assert fake_widgets.created("HTML")[-1].value == "決められない: 顔を採用し直したので、この画面を開き直す"
+
+
+def test_edit_box_refuses_to_save_when_face_removed(forge, fake_widgets):
+    forge.adopt(forge.generate("c1", "face", seeds=[1])[0])
+    edit_box(forge, "c1", widgets=fake_widgets, display=noop)
+    forge.selected.face_path("c1").unlink()
+    fake_widgets.created("Button")[0].click()
+    assert not (forge.selected.selected_dir / "c1" / "selection.json").exists()
+    assert "決められない: 顔を採用し直した" in fake_widgets.created("HTML")[-1].value
