@@ -89,7 +89,7 @@ YAML のタグにカンマを含む重み付きタグを書くときは、引用
 ## 4. Claude 側の流れ
 
 1. `python -m artgen.intake <zip>` で、zip の中身を `characters/<id>/source/` に取り込む。`source/` は丸ごと置き換わり、検査に通らなければ何も書かれない。出力に、取り込んだ・消したファイルと、書き戻すもの（PNG の条件の `overrides`・`selection.json` の範囲 `inpaint_box`）の一覧が出る
-2. 出力の一覧を `character.yaml` などの設定に戻す（`overrides` の `style` は `character.yaml` の `style` へ。デフォルトと同じ画風は一覧に出ないので書かない。範囲は `inpaint_box` へ）
+2. 出力の一覧を `character.yaml` などの設定に戻す（`overrides` の `style` は `character.yaml` の `style` へ。ただし `defaults.yaml` の `style` と同じ画風なら、書かずに `character.yaml` の `style` を消してデフォルトに戻す。範囲は `inpaint_box` へ）
 3. 必要なら `python -m artgen.pnginfo characters/<id>/source/*.png` で PNG の条件を確かめる
 4. `python -m artgen.export <id>` で書き出す（顔は 256×256 に縮め、`params.json` を作る）
 5. push は依頼者が頼んだときだけ行う
