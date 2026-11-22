@@ -84,4 +84,5 @@ def test_notebook_reopen_cell_filters_by_char_and_kind():
     nb, _ = code_cells()
     cells = nb["cells"]
     idx = next(i for i, c in enumerate(cells) if c["cell_type"] == "markdown" and "".join(c["source"]).startswith("## 5. 候補を開き直す"))
-    assert "P.pick(forge, char=" in "".join(cells[idx + 1]["source"])
+    src = "".join(cells[idx + 1]["source"])
+    assert src.startswith("CHAR = ") and "P.pick(forge, char=CHAR, kind=KIND)" in src

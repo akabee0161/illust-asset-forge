@@ -276,10 +276,11 @@ def test_pick_with_char_and_kind_opens_latest_matching_run(forge, fake_widgets):
     assert [b.description for b in fake_widgets.created("Button")] == ["採用", "左右反転して採用"]  # c1 の顔 1 枚
 
 
-def test_pick_char_and_kind_with_paths_is_an_error(forge, fake_widgets):
+@pytest.mark.parametrize("extra", [{"char": "c1"}, {"kind": "face"}, {"run_id": "20261122_093000"}])
+def test_pick_paths_with_char_kind_or_run_id_is_an_error(forge, fake_widgets, extra):
     p = forge.generate("c1", "face", seeds=[1])
     with pytest.raises(ConfigError, match="paths"):
-        pick(forge, p, char="c1", widgets=fake_widgets, display=lambda *a: None)
+        pick(forge, p, widgets=fake_widgets, display=lambda *a: None, **extra)
 
 
 def test_pick_without_filters_opens_latest_run_across_characters(forge, fake_widgets):

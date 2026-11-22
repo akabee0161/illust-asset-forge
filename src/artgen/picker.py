@@ -50,8 +50,8 @@ def pick(forge, paths=None, run_id=None, *, char=None, kind=None, widgets=None, 
     widgets, display = _env(widgets, display)
     if paths is None:
         paths = run_paths(forge.out_dir, run_id, char=char, kind=kind)
-    elif char is not None or kind is not None:
-        raise ConfigError("paths を渡したときは char・kind は使えない（どちらかだけにする）")
+    elif char is not None or kind is not None or run_id is not None:
+        raise ConfigError("paths を渡したときは char・kind・run_id は使えない（どちらかだけにする）")
     paths = [Path(p) for p in paths]
 
     entries = []  # (char_id, path, params | None)
