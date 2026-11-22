@@ -38,7 +38,7 @@ Drive の `illust-asset-forge/` の下の置き場:
 
 | 置き場 | 内容 |
 |---|---|
-| `runs/<run_id>/` | 生成した候補（`<id>_<型>[_<表情>]_<seed>.png`）。画風の見比べは `<id>_<型>_<画風>_<seed>.png` |
+| `runs/<キャラクター>/<種類>/<日時>/` | 生成した候補（`<id>_<型>[_<表情>]_<seed>.png`）。画風の見比べは `<id>_<型>_<画風>_<seed>.png`。古い `runs/<日時>/` のフォルダも `run_id` で今までどおり開ける |
 | `selected/<id>/` | 採用した絵（`face.png`・`face_<表情>.png`・`fullbody.png`）と、表情の範囲 `selection.json`。顔を採り直すと、古い表情と範囲は `replaced/<日時>/` へ退く |
 | `packs/` | まとめの zip（`selected_<日時>.zip`） |
 
@@ -50,12 +50,12 @@ Drive の `illust-asset-forge/` の下の置き場:
    - **モデルの読み込み**: `pipe` が無いときだけ `F.load_pipeline()` で読み込む（数分）。メモリ不足で止まったときだけ `F.load_pipeline(low_memory=True)` にする（遅くなる）。続けて `forge = F.attach(pipe, ".")` で、読み込み済みのパイプラインに設定を結びつける
    - **画風の見比べ（任意）**: `forge.compare_styles(CHAR, n=2)` が、同じシードで画風だけを変えた顔を作り、`P.show_styles(paths)` で画風ごとに並べる。気に入った画風名を後ろの `STYLE` に書く
      - **その場で画風を書く**: YAML を書いて push しなくても、`style=` と `compare_styles(styles=[...])` の要素に `{"name": "my-style", "prompt": ["flat color"], "negative": ["gradient"]}` のような辞書を渡せる（`name` は半角英数字・`_`・`-` だけ。画風名と混ぜてよい。同じ名前の `styles/<name>.yaml` があっても、その場の定義が優先する）。定義は PNG の条件の `overrides.style_definition` に残り、顔を採用すれば表情・全身にも引き継がれる。気に入ったら zip（または辞書）を Claude に渡すと、`styles/<name>.yaml` にしてもらえる
-   - **顔**: `forge.generate(CHARS, "face", n=4, style=STYLE, on_image=F.show_one)`。`CHARS` に並べたキャラクターをまとめて作り、1 枚できるたびに表示される。調整中は `n=2` など少なくし、気に入らなければ ■ で止めて作り直す（止めても、できた分は Drive に残る）。一気に作るときは `n=16` などにして、後から `P.pick(forge, run_id=None)`（中断・切断の後も同じ）で候補を開き直す。`P.pick(forge, paths)` の画面で、採用する顔のボタンを押す
+   - **顔**: `forge.generate(CHARS, "face", n=4, style=STYLE, on_image=F.show_one)`。`CHARS` に並べたキャラクターをまとめて作り、1 枚できるたびに表示される。調整中は `n=2` など少なくし、気に入らなければ ■ で止めて作り直す（止めても、できた分は Drive に残る）。一気に作るときは `n=16` などにして、後から `P.pick(forge, char="ally05", kind="face")`（そのキャラクター・種類の最新の候補。中断・切断の後も同じ。日時を決めるときは `run_id=` を足し、`P.pick(forge, run_id=None)` なら最新の日時の全部）で候補を開き直す。`P.pick(forge, paths)` の画面で、採用する顔のボタンを押す
    - **表情の範囲**: `P.edit_box(forge, CHAR)` が、採用した顔に目と口の赤枠を重ね、スライダーで動かして `selection.json` に保存する。キャラクターごとに表情を作る前に 1 回
    - **表情**: `forge.inpaint(CHAR, "hurt", n=4, on_image=F.show_one)` のあと `P.pick(forge, paths)`。採用した顔と決めた範囲を使うので、パスは書かない
    - **全身**: `forge.generate(CHARS, "fullbody", n=4, on_image=F.show_one)` のあと `P.pick(forge, paths)`
    - **まとめ**: `forge.pack()` が採用した絵を zip にして `packs/` に置く。続くセルでダウンロードする
-3. 候補は Drive の `illust-asset-forge/runs/<run_id>/` に保存される
+3. 候補は Drive の `illust-asset-forge/runs/<キャラクター>/<種類>/<日時>/` に保存される
 
 型 face は、**左向き**の頭から胸までの構図で作る。顔は常に左向きにそろえる。候補が右向きに出たときは、顔の候補の画面で「左右反転して採用」を押して左向きにする（反転は顔の元絵だけで、表情・全身には出ない）。画風は、`style="<画風名>"`（または `STYLE`）で、設定の `style` を一時的に差し替えられる。
 

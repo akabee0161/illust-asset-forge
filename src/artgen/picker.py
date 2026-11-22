@@ -42,11 +42,16 @@ def _thumb_bytes(path: Path, thumb: int) -> bytes:
         return _png(im, thumb)
 
 
-def pick(forge, paths=None, run_id=None, *, widgets=None, display=None, thumb: int = 320) -> None:
-    """候補を縦に並べ、[採用]（顔の元絵だけ [左右反転して採用]）を付ける。"""
+def pick(forge, paths=None, run_id=None, *, char=None, kind=None, widgets=None, display=None,
+         thumb: int = 320) -> None:
+    """候補を縦に並べ、[採用]（顔の元絵だけ [左右反転して採用]）を付ける。
+
+    paths を渡さないときは run_paths で探す。char・kind でキャラクター・種類を絞れる。"""
     widgets, display = _env(widgets, display)
     if paths is None:
-        paths = run_paths(forge.out_dir, run_id)
+        paths = run_paths(forge.out_dir, run_id, char=char, kind=kind)
+    elif char is not None or kind is not None:
+        raise ConfigError("paths を渡したときは char・kind は使えない（どちらかだけにする）")
     paths = [Path(p) for p in paths]
 
     entries = []  # (char_id, path, params | None)

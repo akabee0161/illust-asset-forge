@@ -78,3 +78,10 @@ def test_notebook_headings_are_numbered_in_order():
             if m:
                 numbers.append(m.group(1))
     assert numbers == [str(i) for i in range(1, len(numbers) + 1)]
+
+
+def test_notebook_reopen_cell_filters_by_char_and_kind():
+    nb, _ = code_cells()
+    cells = nb["cells"]
+    idx = next(i for i, c in enumerate(cells) if c["cell_type"] == "markdown" and "".join(c["source"]).startswith("## 5. 候補を開き直す"))
+    assert "P.pick(forge, char=" in "".join(cells[idx + 1]["source"])
