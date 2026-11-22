@@ -37,7 +37,7 @@ def check_expression_source(expression_params: dict, face: Path, where: str) -> 
         raise ConfigError(f"{where}: 表情の元になった顔（{FACE_NAME}）が無い。顔を採用してから表情を作る")
     if file_sha256(face) != expected:
         raise ConfigError(
-            f"{where}: この表情は今の顔から作っていない（顔を採用し直したため）。"
+            f"{where}: この表情は今の顔から作っていない（顔を採用し直したか、別の絵を source に渡したため）。"
             "今の顔で表情を作り直してから採用する"
         )
 

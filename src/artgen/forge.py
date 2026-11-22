@@ -270,7 +270,7 @@ class Forge:
     def adopt(
         self, candidate: str | int | Path, flip: bool = False, run_id: str | None = None,
     ) -> Path:
-        """候補を採用する。Path で存在すればそれを、そうでなければ最新の run（run_id 指定可）から探す。"""
+        """候補を採用する。Path で存在すればそれを、そうでなければ、ファイル名は全部の run から（新しい順）、シードは最新の run（run_id 指定可）から探す。"""
         if isinstance(candidate, Path):
             if not candidate.is_file():
                 raise ConfigError(f"ファイルが無い: {candidate}")
