@@ -52,6 +52,8 @@ def repo(tmp_path):
           "width: 832\nheight: 1216\nprompt: [full body]\nnegative: []\nexport_size: null\n")
     write(tmp_path, "characters/c1/character.yaml", CHARACTER.format(box="[100, 100, 400, 300]"))
     write(tmp_path, "characters/c2/character.yaml", CHARACTER.format(box="[100, 100, 400, 300]"))
+    write(tmp_path, "characters/badexpr/character.yaml",
+          CHARACTER.format(box="[100, 100, 400, 300]").replace("hurt: [pain]", '"a/b": [pain]'))
     write(tmp_path, "styles/t.yaml", "prompt: [watercolor]\nnegative: []\n")
     write(tmp_path, "characters/nobox/character.yaml", CHARACTER.format(box="null"))
     return tmp_path
@@ -71,7 +73,7 @@ def test_generate_saves_with_params(forge, repo, tmp_path):
     paths = forge.generate("c1", "face", seeds=[7, 8])
     assert [p.name for p in paths] == ["c1_face_7.png", "c1_face_8.png"]
     assert paths[0].parent == paths[1].parent
-    assert paths[0].parent.parent == tmp_path / "runs"
+    assert paths[0].parent.parent.parent.parent == tmp_path / "runs"
     assert re.fullmatch(r"\d{8}_\d{6}", paths[0].parent.name)
     params = read_params(paths[0])
     assert params["seed"] == 7
@@ -85,6 +87,43 @@ def test_generate_saves_with_params(forge, repo, tmp_path):
     assert params["character"] == "c1" and params["template"] == "face" and params["style"] == "s"
     assert params["run_id"] == paths[0].parent.name
     assert Image.open(paths[0]).size == (1024, 1024)
+
+
+def test_generate_saves_under_char_kind_run(forge, tmp_path):
+    p = forge.generate("c1", "face", seeds=[7])[0]
+    assert p.parent.parent.parent.parent == tmp_path / "runs"
+    assert (p.parent.parent.parent.name, p.parent.parent.name) == ("c1", "face")
+    assert re.fullmatch(r"\d{8}_\d{6}", p.parent.name) and read_params(p)["run_id"] == p.parent.name
+
+
+def test_multi_character_run_splits_dirs_with_same_run_id(forge):
+    paths = forge.generate(["c1", "c2"], "face", seeds=[7])
+    assert paths[0].parent.parent.parent.name == "c1" and paths[1].parent.parent.parent.name == "c2"
+    assert paths[0].parent.name == paths[1].parent.name
+
+
+def test_kinds_for_fullbody_expression_and_styles(forge):
+    assert forge.generate("c1", "fullbody", seeds=[1])[0].parent.parent.name == "fullbody"
+    forge.adopt(forge.generate("c1", "face", seeds=[2])[0])
+    assert forge.inpaint("c1", "hurt", seeds=[3])[0].parent.parent.name == "face-hurt"
+    assert forge.compare_styles("c1", styles=["s"], seeds=[4])[0].parent.parent.name == "styles"
+
+
+def test_unsafe_expression_name_stops_before_gpu(forge, pipe):
+    forge.adopt(forge.generate("badexpr", "face", seeds=[1])[0])
+    pipe.calls.clear()
+    with pytest.raises(ConfigError, match="ファイル名に使えない"):
+        forge.inpaint("badexpr", "a/b", seeds=[2])
+    assert pipe.calls == []
+
+
+def test_interrupted_multi_character_run_returns_paths_usable_by_pick(forge, pipe):
+    def stop_on_third(path):
+        if len(pipe.calls) == 3:
+            raise KeyboardInterrupt
+    paths = forge.generate(["c1", "c2"], "face", seeds=[7, 8], on_image=stop_on_third)
+    assert [p.name for p in paths] == ["c1_face_7.png", "c1_face_8.png", "c2_face_7.png"]
+    assert all(p.is_file() for p in paths)
 
 
 def test_generate_passes_prompt_and_generator(forge, repo, pipe):
@@ -468,7 +507,7 @@ def test_show_one_displays_image_and_seed(forge, monkeypatch, capsys):
 def test_generate_multiple_characters_in_one_run(forge):
     paths = forge.generate(["c1", "c2"], "face", seeds=[7, 8])
     assert [p.name for p in paths] == ["c1_face_7.png", "c1_face_8.png", "c2_face_7.png", "c2_face_8.png"]
-    assert len({p.parent for p in paths}) == 1
+    assert len({p.parent.name for p in paths}) == 1 and len({p.parent for p in paths}) == 2
 
 
 def test_generate_checks_all_characters_before_gpu(forge, pipe):

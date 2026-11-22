@@ -20,7 +20,7 @@ from artgen.config import (
 from artgen.mask import check_box, check_feather, feather_composite, make_mask
 from artgen.pnginfo import MissingParamsError, read_params, save_png
 from artgen.prompt import Overrides, build_prompt
-from artgen.selection import SelectionStore, file_sha256, find_candidate
+from artgen.selection import SelectionStore, file_sha256, find_candidate, run_dir, run_kind
 
 MODEL_NAME = "cagliostrolab/animagine-xl-4.0"
 SAMPLER_NAME = "Euler a"
@@ -119,7 +119,7 @@ class Forge:
             **self.env,
         }
 
-    def _run(self, jobs, run_dir: Path, build, on_image) -> list[Path]:
+    def _run(self, jobs, out_dir: Path, build, on_image) -> list[Path]:
         """ジョブ（シード、または (キャラクター, シード) など）ごとに生成して保存する。
         1 枚保存するたびに on_image を呼ぶ。
 
@@ -136,7 +136,7 @@ class Forge:
                 if on_image is not None:
                     on_image(path)
         except KeyboardInterrupt:
-            print(f"中断: {len(paths)} 枚が {run_dir} に保存済み")
+            print(f"中断: {len(paths)} 枚が {out_dir} の下に保存済み")
         return paths
 
     def _finish_one(self) -> None:
@@ -191,6 +191,7 @@ class Forge:
 
     def _text2img_batch(
         self, entries, template, seed_list, overrides, guidance, steps, file_name, on_image,
+        *, compare: bool = False,
     ) -> list[Path]:
         """entries（(キャラクター, 画風) の一覧。画風は名前か、その場の定義の Style）を順に、それぞれ seed_list の全シードで生成する。
 
@@ -200,6 +201,8 @@ class Forge:
         guidance_used = tpl.guidance if guidance is None else guidance
         steps_used = tpl.steps if steps is None else steps
         self._check_sampling(guidance_used, steps_used)
+        run_id = datetime.now().strftime("%Y%m%d_%H%M%S")
+        kind = run_kind(template, compare=compare)
         plans = {}
         names = []
         for char_id, style_ref in entries:
@@ -209,15 +212,15 @@ class Forge:
             recorded = self._recorded_style_overrides(
                 overrides, style_ref, style, character, guidance=guidance, steps=steps,
             )
-            plans[(char_id, style.name)] = (character, style, prompt, recorded)
+            plans[(char_id, style.name)] = (
+                character, style, prompt, recorded, run_dir(self.out_dir, char_id, kind, run_id),
+            )
             names.append((char_id, style.name))
 
-        run_id = datetime.now().strftime("%Y%m%d_%H%M%S")
-        run_dir = self.out_dir / run_id
 
         def build(job):
             entry, seed = job
-            character, style, prompt, recorded = plans[entry]
+            character, style, prompt, recorded, entry_dir = plans[entry]
             image = self.pipe.text2img(
                 prompt=prompt.positive,
                 negative_prompt=prompt.negative,
@@ -233,10 +236,10 @@ class Forge:
                 expression=character.default_expression, overrides=recorded, seed=seed,
                 guidance=guidance_used, steps=steps_used, run_id=run_id,
             )
-            return image, params, run_dir / file_name(*entry, seed)
+            return image, params, entry_dir / file_name(*entry, seed)
 
         jobs = [(entry, seed) for entry in names for seed in seed_list]
-        return self._run(jobs, run_dir, build, on_image)
+        return self._run(jobs, self.out_dir, build, on_image)
 
     def generate(
         self,
@@ -293,6 +296,7 @@ class Forge:
             [(char_id, s) for s in styles], template, seed_list,
             Overrides.from_args("", "", "", ""), None, None,
             lambda c, s, seed: f"{c}_{template}_{s}_{seed}.png", on_image,
+            compare=True,
         )
 
     # --- 表情（inpaint） -----------------------------------------------
@@ -351,6 +355,8 @@ class Forge:
         tpl = load_template(self.root, "face")
         overrides = Overrides.from_args(extra, remove, extra_negative, remove_negative)
         prompt = build_prompt(style_obj, tpl, character, expression=expression, overrides=overrides)
+        run_id = datetime.now().strftime("%Y%m%d_%H%M%S")
+        result_dir = run_dir(self.out_dir, char_id, run_kind("face", expression), run_id)
 
         # GPU を回す前に、入力の誤りをすべて止める
         box, box_from = self.resolve_box(char_id)
@@ -396,8 +402,6 @@ class Forge:
         self._check_sampling(guidance, steps, strength)
         seed_list = self._seeds(n, seeds)
 
-        run_id = datetime.now().strftime("%Y%m%d_%H%M%S")
-        run_dir = self.out_dir / run_id
 
         def build(seed: int):
             generated = self.pipe.inpaint(
@@ -426,9 +430,9 @@ class Forge:
                 strength=strength,
                 feather=tpl.inpaint_feather,
             )
-            return result, params, run_dir / f"{char_id}_face_{expression}_{seed}.png"
+            return result, params, result_dir / f"{char_id}_face_{expression}_{seed}.png"
 
-        return self._run(seed_list, run_dir, build, on_image)
+        return self._run(seed_list, self.out_dir, build, on_image)
 
 
 def _check_unique(values: list[str], label: str) -> None:
