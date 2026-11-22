@@ -218,6 +218,46 @@ def test_adopt_interrupt_after_publish_restores_whole_previous_state(
     assert {p.name: p.read_bytes() for p in d.iterdir()} == before
 
 
+def test_adopt_does_not_restore_stale_backup_from_earlier_failed_restore(
+    store, candidate, half_red_candidate, expression_candidate, monkeypatch
+):
+    store.adopt(candidate)
+    d = store.selected_dir / "c1"
+    real_replace = os.replace
+
+    def publish_then_interrupt_and_break_restore(src, dst, *a, **k):
+        if os.path.basename(src).startswith(".face.png.old"):
+            raise OSError("restore failed")
+        real_replace(src, dst, *a, **k)
+        if os.path.basename(dst) == "face.png" and os.path.basename(src) == ".face.png.new":
+            raise KeyboardInterrupt
+
+    with monkeypatch.context() as m:
+        m.setattr("artgen.selection.os.replace", publish_then_interrupt_and_break_restore)
+        with pytest.raises(KeyboardInterrupt) as info:
+            store.adopt(half_red_candidate)
+    assert any("戻せなかった" in n for n in info.value.__notes__)
+    stale = [p for p in d.iterdir() if p.name.startswith(".face.png.old")]
+    assert len(stale) == 1
+    stale_bytes = stale[0].read_bytes()
+
+    # 現在の状態（顔・表情・範囲）を作り直してから、保存で失敗する採用を行う
+    store.adopt(candidate)
+    store.adopt(expression_candidate)
+    store.save_box("c1", (1, 2, 300, 400))
+    before = {p.name: p.read_bytes() for p in d.iterdir() if p != stale[0]}
+
+    def boom(*a, **k):
+        raise OSError("disk full")
+
+    with monkeypatch.context() as m:
+        m.setattr("artgen.selection.save_png", boom)
+        with pytest.raises(OSError, match="disk full"):
+            store.adopt(half_red_candidate)
+    assert {p.name: p.read_bytes() for p in d.iterdir() if p != stale[0]} == before
+    assert stale[0].read_bytes() == stale_bytes
+
+
 def test_adopt_success_leaves_no_backup_file(store, candidate, half_red_candidate):
     store.adopt(candidate)
     store.adopt(half_red_candidate)

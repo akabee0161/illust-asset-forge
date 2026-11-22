@@ -130,7 +130,7 @@ class SelectionStore:
         # 先に新しい絵を一時ファイルへ保存する。失敗しても前の採用は動かさない
         tmp = char_dir / f".{name}.new"
         dest = char_dir / name
-        backup = char_dir / f".{name}.old"  # 公開後に失敗しても前の絵へ戻せるように取っておく
+        backup: Path | None = None  # この試行が作った前の絵の控え。公開後に失敗しても戻せるように取っておく
         try:
             saved = {k: v for k, v in params.items() if k != "adopted_from_sha256"}
             saved["flipped"] = bool(flip)
@@ -141,17 +141,22 @@ class SelectionStore:
             if name == FACE_NAME:
                 self._move_aside(char_dir, now())
             if dest.is_file():
+                # 戻せず残った前回の控えを上書き・復元しないよう、試行ごとの名前にする
+                n = 0
+                while (attempt_backup := char_dir / f".{name}.old.{n}").exists():
+                    n += 1
                 try:
-                    shutil.copy2(dest, backup)
+                    shutil.copy2(dest, attempt_backup)
                 except BaseException:
-                    backup.unlink(missing_ok=True)  # 途中のコピーで前の絵を壊さない
+                    attempt_backup.unlink(missing_ok=True)  # 途中のコピーで前の絵を壊さない
                     raise
+                backup = attempt_backup
             os.replace(tmp, dest)
         except BaseException as e:
             # 途中で失敗したら、前の絵・表情・範囲の組み合わせに戻す。
             # 戻す側の失敗で元の例外を隠さない（残った .old は手で戻せる）
             try:
-                if backup.exists():
+                if backup is not None and backup.exists():
                     if dest.is_file() and file_sha256(dest) == file_sha256(backup):
                         backup.unlink()  # まだ公開前（前の絵のまま）
                     else:
@@ -162,7 +167,8 @@ class SelectionStore:
             raise
         finally:
             tmp.unlink(missing_ok=True)
-        backup.unlink(missing_ok=True)
+        if backup is not None:
+            backup.unlink(missing_ok=True)
         return dest
 
     def _move_aside(self, char_dir: Path, when: datetime) -> None:
