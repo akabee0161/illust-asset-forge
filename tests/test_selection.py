@@ -1,3 +1,5 @@
+import os
+import shutil
 import zipfile
 from datetime import datetime
 
@@ -347,3 +349,57 @@ def test_adopt_expression_made_from_older_candidate_is_rejected(
     store.adopt(half_red_candidate)
     with pytest.raises(ConfigError, match="今の顔から作っていない"):
         store.adopt(expr)
+
+
+def _snapshot(d):
+    return {str(p.relative_to(d)): p.read_bytes() for p in sorted(d.rglob("*")) if p.is_file()}, sorted(
+        str(p.relative_to(d)) for p in d.rglob("*") if p.is_dir()
+    )
+
+
+def _adopted_state(store, candidate, expression_candidate):
+    store.adopt(candidate)
+    store.adopt(expression_candidate)
+    store.save_box("c1", (1, 2, 300, 400))
+    return store.selected_dir / "c1"
+
+
+def test_adopt_restores_moved_files_when_final_replace_fails(
+    store, candidate, half_red_candidate, expression_candidate, monkeypatch
+):
+    d = _adopted_state(store, candidate, expression_candidate)
+    before = _snapshot(d)
+    real = os.replace
+
+    def boom(src, dst, *a, **k):
+        if os.path.basename(dst) == "face.png":
+            raise OSError("replace failed")
+        return real(src, dst, *a, **k)
+
+    monkeypatch.setattr("artgen.selection.os.replace", boom)
+    with pytest.raises(OSError, match="replace failed"):
+        store.adopt(half_red_candidate)
+    assert _snapshot(d) == before
+    assert store.last_moved == [] and store.last_replaced is None
+
+
+def test_adopt_restores_moved_files_when_move_fails_partway(
+    store, candidate, expression_candidate, monkeypatch
+):
+    d = _adopted_state(store, candidate, expression_candidate)
+    before = _snapshot(d)
+    real = shutil.move
+    calls = []
+
+    def boom(src, dst, *a, **k):
+        calls.append(src)
+        if len(calls) == 2:
+            raise OSError("move failed")
+        return real(src, dst, *a, **k)
+
+    monkeypatch.setattr("artgen.selection.shutil.move", boom)
+    with pytest.raises(OSError, match="move failed"):
+        store.adopt(candidate)
+    assert len(calls) >= 2  # 2 回目で失敗し、そのあと戻しでも呼ばれる
+    assert _snapshot(d) == before
+    assert store.last_moved == [] and store.last_replaced is None

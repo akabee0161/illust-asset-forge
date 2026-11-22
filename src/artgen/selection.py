@@ -91,6 +91,8 @@ class SelectionStore:
         # 直近の adopt で replaced/ へ移したファイル名と、移した先のフォルダ名（画面に出す用）
         self.last_moved: list[str] = []
         self.last_replaced: str | None = None
+        self._moves: list[tuple[Path, Path]] = []  # (元の場所, replaced/ の中)
+        self._created_dirs: list[Path] = []
 
     def face_path(self, char_id: str) -> Path:
         return self.selected_dir / char_id / FACE_NAME
@@ -110,6 +112,7 @@ class SelectionStore:
     ) -> Path:
         candidate = Path(candidate)
         self.last_moved, self.last_replaced = [], None
+        self._moves, self._created_dirs = [], []
         # 何も書く前に検査する
         params = read_params(candidate)
         name = selected_name(params)
@@ -136,6 +139,9 @@ class SelectionStore:
             if name == FACE_NAME:
                 self._move_aside(char_dir, now())
             os.replace(tmp, char_dir / name)
+        except BaseException:
+            self._restore_aside()  # 途中で失敗したら、前の採用に戻す
+            raise
         finally:
             tmp.unlink(missing_ok=True)
         return char_dir / name
@@ -153,12 +159,31 @@ class SelectionStore:
         while dest.exists():  # 同じ秒の再採用で上書きしない
             n += 1
             dest = base / f"{stamp}_{n}"
+        if not base.exists():
+            self._created_dirs.append(base)
         dest.mkdir(parents=True)
+        self._created_dirs.append(dest)
         self.last_replaced = dest.name
         for p in targets:
+            self._moves.append((p, dest / p.name))
             shutil.move(str(p), dest / p.name)
             self.last_moved.append(p.name)
             print(f"{char_dir.name}/{p.name} を replaced/{dest.name}/ へ移した")
+
+    def _restore_aside(self) -> None:
+        """replaced/ へ移したファイルを元の場所へ戻し、作った空のフォルダを消す。"""
+        for orig, moved in reversed(self._moves):
+            if orig.exists():
+                moved.unlink(missing_ok=True)  # 移しかけの残り
+            elif moved.exists():
+                shutil.move(str(moved), orig)
+        for d in reversed(self._created_dirs):
+            try:
+                d.rmdir()
+            except OSError:
+                pass
+        self._moves, self._created_dirs = [], []
+        self.last_moved, self.last_replaced = [], None
 
     def read_box(self, char_id: str) -> Box | None:
         path = self.selected_dir / char_id / BOX_FILE
