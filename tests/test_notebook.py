@@ -18,11 +18,13 @@ def test_notebook_cells_parse():
         ast.parse("\n".join(lines))
 
 
-def test_notebook_uses_existing_api():
+def test_notebook_uses_new_api():
     _, cells = code_cells()
     code = "\n".join(cells)
-    for needle in ("forge.generate(", "forge.inpaint(", "on_image=F.show_one", "F.load("):
+    for needle in ("F.load_pipeline(", "F.attach(", "forge.generate(CHARS", "P.pick(forge", "P.edit_box(forge",
+                   "forge.inpaint(CHAR, ", "forge.compare_styles(", "P.show_styles(", "forge.pack("):
         assert needle in code
+    assert "/content/drive/MyDrive/illust-asset-forge/runs/<" not in code  # パスを書き換える場面が無い
 
 
 def test_notebook_has_no_outputs():
@@ -41,12 +43,13 @@ def test_notebook_makes_package_importable_in_running_kernel():
     assert setup.index("sys.path.insert") < setup.index("from artgen import forge")
 
 
-def test_notebook_load_cell_is_separate_and_skips_if_already_loaded():
+def test_setup_cell_rebuilds_forge_from_kept_pipeline():
     _, cells = code_cells()
     setup = next(c for c in cells if "from artgen import forge" in c)
-    assert "F.load(" not in setup  # 設定を pull し直すだけのときにモデルを読み込まない
-    load = next(c for c in cells if "F.load(" in c)
-    assert 'in globals()' in load
+    assert "F.load_pipeline(" not in setup  # 設定を pull し直すだけのときにモデルを読み込まない
+    assert 'if "pipe" in globals()' in setup and "F.attach(pipe" in setup
+    load = next(c for c in cells if "F.load_pipeline(" in c)
+    assert 'if "pipe" not in globals()' in load and "F.attach(pipe" in load
 
 
 def test_notebook_purges_cached_artgen_modules_before_import():
