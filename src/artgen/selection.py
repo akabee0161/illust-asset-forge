@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import shutil
@@ -20,6 +21,25 @@ FACE_NAME = "face.png"
 _STAMP = "%Y%m%d_%H%M%S"
 
 Box = tuple[int, int, int, int]
+
+
+def file_sha256(path: Path) -> str:
+    return hashlib.sha256(Path(path).read_bytes()).hexdigest()
+
+
+def check_expression_source(expression_params: dict, face: Path, where: str) -> None:
+    """表情が今の顔から作った物か確かめる。source_sha256 が無い古い PNG は止めない。"""
+    expected = expression_params.get("source_sha256")
+    if expected is None:
+        return
+    face = Path(face)
+    if not face.is_file():
+        raise ConfigError(f"{where}: 表情の元になった顔（{FACE_NAME}）が無い。顔を採用してから表情を作る")
+    if file_sha256(face) != expected:
+        raise ConfigError(
+            f"{where}: この表情は今の顔から作っていない（顔を採用し直したため）。"
+            "今の顔で表情を作り直してから採用する"
+        )
 
 
 def selected_name(params: dict) -> str:
@@ -79,6 +99,8 @@ class SelectionStore:
         char_id = _check_char_id(params.get("character"), candidate.name)
         if flip and name != FACE_NAME:
             raise ConfigError(f"{candidate.name}: 左右反転は顔（{FACE_NAME}）だけに使える")
+        if name not in (FACE_NAME, "fullbody.png"):
+            check_expression_source(params, self.face_path(char_id), candidate.name)
         with Image.open(candidate) as im:
             image = im.copy()
         if flip:

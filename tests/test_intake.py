@@ -282,3 +282,35 @@ def test_main_exits_1_for_encrypted_zip(repo, tmp_path, capsys, monkeypatch):
     assert main([str(z), "--root", str(repo)]) == 1
     assert "取り込めない" in capsys.readouterr().out
     monkeypatch.setattr(zipfile.ZipFile, "open", real_open)
+
+
+def _expression_with_hash(path, face):
+    from artgen.selection import file_sha256
+
+    path.parent.mkdir(parents=True, exist_ok=True)
+    save_png(Image.new("RGB", (8, 8)), path, {
+        "seed": 1, "template": "face", "character": "c1", "overrides": {},
+        "expression": "hurt", "source": "face.png", "source_sha256": file_sha256(face),
+    })
+
+
+def test_install_accepts_expression_made_from_packed_face(repo, selected):
+    _expression_with_hash(selected / "c1/face_hurt.png", selected / "c1/face.png")
+    [r] = install_selection(repo, selected)
+    assert "face_hurt.png" in r.installed
+
+
+def test_install_rejects_expression_made_from_other_face(repo, selected):
+    _expression_with_hash(selected / "c1/face_hurt.png", selected / "c1/face.png")
+    write_png(selected / "c1/face.png", overrides={"extra": ["other"]})  # 顔だけ差し替わった
+    before = sorted((repo / "characters/c1/source").iterdir())
+    with pytest.raises(ConfigError, match="今の顔から作っていない"):
+        install_selection(repo, selected)
+    assert sorted((repo / "characters/c1/source").iterdir()) == before
+
+
+def test_install_rejects_hashed_expression_without_face(repo, selected):
+    _expression_with_hash(selected / "c1/face_hurt.png", selected / "c1/face.png")
+    (selected / "c1/face.png").unlink()
+    with pytest.raises(ConfigError, match="顔"):
+        install_selection(repo, selected)

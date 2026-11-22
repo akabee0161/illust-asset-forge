@@ -16,6 +16,7 @@ from pathlib import Path, PurePosixPath
 from artgen.config import ConfigError, load_character
 from artgen.export import _accepted_names
 from artgen.pnginfo import MissingParamsError, read_params
+from artgen.selection import check_expression_source
 
 BOX_FILE = "selection.json"
 MAX_ENTRIES = 200
@@ -131,6 +132,8 @@ def install_selection(root: Path, selected_dir: Path) -> list[CharacterReport]:
             if owner != char_id:
                 raise ConfigError(f"{where}: 条件の character が {owner!r}（{char_id!r} の絵でない）")
             pngs.append(p)
+            if p.name not in ("face.png", "fullbody.png"):
+                check_expression_source(params, char_dir / "face.png", where)
             overrides = params.get("overrides")
             if overrides:
                 write_back.append(f"{p.name}: overrides: {json.dumps(overrides, ensure_ascii=False)}")

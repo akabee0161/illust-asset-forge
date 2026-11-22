@@ -238,3 +238,42 @@ def test_adopt_source_without_expression_writes_nothing(store, tmp_path):
     with pytest.raises(ConfigError, match="expression"):
         store.adopt(c)
     assert not store.selected_dir.exists()
+
+
+def _expression_from(face_path, tmp_path, name="c1_face_hurt_5.png", with_hash=True):
+    from artgen.selection import file_sha256
+
+    p = {**FACE, "expression": "hurt", "source": "face.png", "seed": 5}
+    if with_hash:
+        p["source_sha256"] = file_sha256(face_path)
+    return _make(tmp_path / "cand" / name, p)
+
+
+def test_adopt_expression_made_from_current_face(store, candidate, tmp_path):
+    face = store.adopt(candidate)
+    expr = _expression_from(face, tmp_path)
+    assert store.adopt(expr).name == "face_hurt.png"
+
+
+def test_adopt_expression_from_old_face_is_rejected(store, candidate, half_red_candidate, tmp_path):
+    old_face = store.adopt(candidate)
+    expr = _expression_from(old_face, tmp_path)
+    store.adopt(half_red_candidate)  # 顔を採用し直す
+    with pytest.raises(ConfigError, match="今の顔から作っていない"):
+        store.adopt(expr)
+    assert not (store.selected_dir / "c1" / "face_hurt.png").exists()
+
+
+def test_adopt_expression_without_face_is_rejected(store, candidate, tmp_path):
+    face = store.adopt(candidate)
+    expr = _expression_from(face, tmp_path)
+    face.unlink()
+    with pytest.raises(ConfigError, match="顔"):
+        store.adopt(expr)
+
+
+def test_adopt_expression_without_recorded_hash_is_not_blocked(store, candidate, tmp_path):
+    """source_sha256 が無い古い PNG は、後方互換のため止めない。"""
+    face = store.adopt(candidate)
+    expr = _expression_from(face, tmp_path, with_hash=False)
+    assert store.adopt(expr).name == "face_hurt.png"

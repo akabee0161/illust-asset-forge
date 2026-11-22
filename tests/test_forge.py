@@ -554,3 +554,14 @@ def test_inpaint_with_face_lacking_params_says_to_readopt(forge, pipe):
     with pytest.raises(ConfigError, match="採用し直す"):
         forge.inpaint("c1", "hurt", seeds=[3])
     assert pipe.calls == []
+
+
+def test_inpaint_records_source_hash_and_adopt_blocks_after_readopt(forge):
+    import hashlib
+
+    face = forge.adopt(forge.generate("c1", "face", seeds=[1])[0])
+    expr = forge.inpaint("c1", "hurt", seeds=[3])[0]
+    assert read_params(expr)["source_sha256"] == hashlib.sha256(face.read_bytes()).hexdigest()
+    forge.adopt(forge.generate("c1", "face", seeds=[2])[0])  # 顔を採用し直す
+    with pytest.raises(ConfigError, match="今の顔から作っていない"):
+        forge.adopt(expr)

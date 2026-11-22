@@ -18,7 +18,7 @@ from artgen.config import ConfigError, load_character, load_style, load_template
 from artgen.mask import check_box, check_feather, feather_composite, make_mask
 from artgen.pnginfo import MissingParamsError, read_params, save_png
 from artgen.prompt import Overrides, build_prompt
-from artgen.selection import SelectionStore, find_candidate
+from artgen.selection import SelectionStore, file_sha256, find_candidate
 
 MODEL_NAME = "cagliostrolab/animagine-xl-4.0"
 SAMPLER_NAME = "Euler a"
@@ -319,6 +319,7 @@ class Forge:
         source = Path(source)
         if not source.is_file():
             raise ConfigError(f"source: ファイルが無い: {source}")
+        source_sha256 = file_sha256(source)
         with Image.open(source) as im:
             original = im.convert("RGB")
         if original.size != (tpl.width, tpl.height):
@@ -374,6 +375,7 @@ class Forge:
             )
             params.update(
                 source=source.name,
+                source_sha256=source_sha256,
                 inpaint_box=list(box),
                 strength=strength,
                 feather=tpl.inpaint_feather,
