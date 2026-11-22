@@ -314,3 +314,37 @@ def test_install_rejects_hashed_expression_without_face(repo, selected):
     (selected / "c1/face.png").unlink()
     with pytest.raises(ConfigError, match="顔"):
         install_selection(repo, selected)
+
+
+def _expr_with_box(path, box):
+    save_png(Image.new("RGB", (8, 8)), path, {
+        "seed": 1, "template": "face", "character": "c1", "overrides": {},
+        "expression": "hurt", "source": "face.png", "inpaint_box": box,
+    })
+
+
+def test_write_back_uses_box_the_expression_was_made_with(repo, selected):
+    # 表情を作ったあとで範囲を動かした（selection.json は新しい範囲）
+    _expr_with_box(selected / "c1/face_hurt.png", [5, 6, 70, 80])
+    [r] = install_selection(repo, selected)
+    boxes = [w for w in r.write_back if w.startswith("inpaint_box")]
+    assert boxes == ["inpaint_box: [5, 6, 70, 80] を character.yaml へ"]
+
+
+def test_write_back_lists_default_box_without_selection_json(repo, selected):
+    (selected / "c1/selection.json").unlink()
+    _expr_with_box(selected / "c1/face_hurt.png", [320, 260, 720, 660])  # 型の既定で作った
+    [r] = install_selection(repo, selected)
+    assert "inpaint_box: [320, 260, 720, 660] を character.yaml へ" in r.write_back
+
+
+def test_write_back_omits_used_box_equal_to_yaml(repo, selected):
+    _expr_with_box(selected / "c1/face_hurt.png", [1, 2, 30, 40])
+    [r] = install_selection(repo, selected)
+    assert not [w for w in r.write_back if w.startswith("inpaint_box")]
+
+
+def test_main_reports_decompression_bomb(repo, pack_zip, capsys, monkeypatch):
+    monkeypatch.setattr(Image, "MAX_IMAGE_PIXELS", 10)
+    assert main([str(pack_zip), "--root", str(repo)]) == 1
+    assert "取り込めない" in capsys.readouterr().out

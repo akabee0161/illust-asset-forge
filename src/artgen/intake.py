@@ -13,6 +13,8 @@ import zipfile
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
 
+from PIL import Image
+
 from artgen.config import ConfigError, load_character
 from artgen.export import _accepted_names
 from artgen.pnginfo import MissingParamsError, read_params
@@ -120,6 +122,7 @@ def install_selection(root: Path, selected_dir: Path) -> list[CharacterReport]:
         pngs: list[Path] = []
         write_back: list[str] = []
         selection_box: list[int] | None = None
+        used_boxes: list[list[int]] = []  # 表情の PNG が実際に使った範囲
         for p in _visible_files(char_dir):
             where = f"{char_id}/{p.name}"
             if p.name == BOX_FILE:
@@ -132,6 +135,14 @@ def install_selection(root: Path, selected_dir: Path) -> list[CharacterReport]:
             if owner != char_id:
                 raise ConfigError(f"{where}: 条件の character が {owner!r}（{char_id!r} の絵でない）")
             pngs.append(p)
+            used = params.get("inpaint_box")
+            if (
+                isinstance(used, list)
+                and len(used) == 4
+                and all(isinstance(v, int) and not isinstance(v, bool) for v in used)
+                and used not in used_boxes
+            ):
+                used_boxes.append(used)
             if p.name not in ("face.png", "fullbody.png"):
                 check_expression_source(params, char_dir / "face.png", where)
             overrides = params.get("overrides")
@@ -139,8 +150,12 @@ def install_selection(root: Path, selected_dir: Path) -> list[CharacterReport]:
                 write_back.append(f"{p.name}: overrides: {json.dumps(overrides, ensure_ascii=False)}")
         if not pngs:
             raise ConfigError(f"{char_id}: 取り込む PNG が無い")
-        if selection_box is not None and selection_box != list(character.inpaint_box or ()):
-            write_back.append(f"inpaint_box: {_format_box(selection_box)} を character.yaml へ")
+        # 表情を作ったときに使った範囲を優先する（後から範囲を動かしても、絵と合う方を戻す）
+        candidates = used_boxes or ([selection_box] if selection_box is not None else [])
+        current = list(character.inpaint_box or ())
+        for box in candidates:
+            if box != current:
+                write_back.append(f"inpaint_box: {_format_box(box)} を character.yaml へ")
 
         source_dir = root / "characters" / char_id / "source"
         old = {p.name for p in _visible_files(source_dir)} if source_dir.is_dir() else set()
@@ -224,7 +239,10 @@ def main(argv: list[str] | None = None) -> int:
         with tempfile.TemporaryDirectory() as tmp:
             selected = extract_pack(args.zip, Path(tmp) / "selected", root=args.root)
             reports = install_selection(args.root, selected)
-    except (ConfigError, MissingParamsError, zipfile.BadZipFile, UnicodeDecodeError, RuntimeError, OSError) as e:
+    except (
+        ConfigError, MissingParamsError, zipfile.BadZipFile, UnicodeDecodeError, RuntimeError, OSError,
+        Image.DecompressionBombError,
+    ) as e:
         print(f"取り込めない: {e}")
         return 1
     for r in reports:
