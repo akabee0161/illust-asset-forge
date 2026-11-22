@@ -107,4 +107,4 @@ GPU を使う部分は Claude が動かして確かめられない。次を 1 �
 uv venv .venv && uv pip install -e '.[dev]' && .venv/bin/pytest
 ```
 
-`src/artgen/forge.py` の `load_pipeline()`・`show_one()`・`show()` と、`picker` のボタンの画面以外は torch・diffusers が無くても動く。
+`src/artgen/forge.py` の `load_pipeline()`・`attach()`・`show_one()`・`show()` と、`picker` のボタンの画面以外は torch・diffusers が無くても動く。
