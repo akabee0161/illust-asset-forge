@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -59,6 +60,19 @@ def has_unbalanced_parens(tag: str) -> bool:
     return tag.count("(") != tag.count(")") or tag.count("[") != tag.count("]")
 
 
+def parse_tag_list(prefix: str, where: str, value: Any) -> list[str]:
+    """タグの一覧（文字列のリストで、カッコの対応が取れている）を検査して返す。"""
+    if not isinstance(value, list) or not all(isinstance(v, str) for v in value):
+        raise ConfigError(f"{prefix}: {where}: タグの一覧でない")
+    for tag in value:
+        if has_unbalanced_parens(tag):
+            raise ConfigError(
+                f"{prefix}: {where}: タグ {tag!r} のカッコの対応が取れない。"
+                "カンマを含むタグは引用符で囲む（例: '(a, b:1.1)'）"
+            )
+    return list(value)
+
+
 def parse_box(rel: str, where: str, value: Any) -> tuple[int, int, int, int]:
     """[x0, y0, x1, y1] を検査して返す（0 以上の整数で x0<x1・y0<y1）。"""
     if not isinstance(value, list) or len(value) != 4:
@@ -101,15 +115,7 @@ class _Reader:
         return self.tag_list(key, self._get(key, default))
 
     def tag_list(self, where: str, value: Any) -> list[str]:
-        if not isinstance(value, list) or not all(isinstance(v, str) for v in value):
-            raise self.fail(where, "タグの一覧でない")
-        for tag in value:
-            if has_unbalanced_parens(tag):
-                raise self.fail(
-                    where,
-                    f"タグ {tag!r} のカッコの対応が取れない。カンマを含むタグは引用符で囲む（例: '(a, b:1.1)'）",
-                )
-        return list(value)
+        return parse_tag_list(self.rel, where, value)
 
     def string(self, key: str) -> str:
         value = self._get(key, _MISSING)
@@ -140,6 +146,33 @@ class _Reader:
 def load_style(root: Path, name: str) -> Style:
     r = _Reader(root, f"styles/{name}.yaml")
     return Style(name=name, prompt=r.tags("prompt"), negative=r.tags("negative"))
+
+
+_STYLE_NAME_RE = re.compile(r"[A-Za-z0-9_-]+")
+
+
+def inline_style(value: Any) -> Style:
+    """その場で書いた画風 {"name", "prompt", "negative"} を検査して Style にする。"""
+    prefix = "style（その場の定義）"
+    if not isinstance(value, dict):
+        raise ConfigError(
+            f"{prefix}: 画風名の文字列か、{{'name': ..., 'prompt': [...], 'negative': [...]}} の辞書でない: {value!r}"
+        )
+    unknown = sorted(str(k) for k in set(value) - {"name", "prompt", "negative"})
+    if unknown:
+        raise ConfigError(f"{prefix}: {', '.join(unknown)}: 使えないキー（name・prompt・negative だけ）")
+    name = value.get("name")
+    if not isinstance(name, str) or not _STYLE_NAME_RE.fullmatch(name):
+        raise ConfigError(
+            f"{prefix}: name: 半角英数字・_・- だけの空でない文字列にする（styles/<name>.yaml のファイル名になる）: {name!r}"
+        )
+    if "prompt" not in value:
+        raise ConfigError(f"{prefix}: prompt: 必須のキーが無い")
+    prompt = parse_tag_list(prefix, "prompt", value["prompt"])
+    if not prompt or any(not t.strip() for t in prompt):
+        raise ConfigError(f"{prefix}: prompt: 空でないタグを 1 つ以上並べる")
+    negative = parse_tag_list(prefix, "negative", value.get("negative", []))
+    return Style(name=name, prompt=prompt, negative=negative)
 
 
 def load_template(root: Path, name: str) -> Template:

@@ -177,3 +177,47 @@ def test_template_rejects_bad_inpaint_box(tmp_path, box):
           f"inpaint: {{strength: 0.6, feather: 24, box: {box}}}\n")
     with pytest.raises(ConfigError, match=r"templates/face.yaml: inpaint.box: "):
         load_template(tmp_path, "face")
+
+
+# --- その場の画風（inline_style） ---------------------------------------
+
+
+def test_inline_style_builds_style():
+    from artgen.config import Style, inline_style
+
+    s = inline_style({"name": "my-style_2", "prompt": ["flat color"], "negative": []})
+    assert s == Style(name="my-style_2", prompt=["flat color"], negative=[])
+
+
+def test_inline_style_negative_defaults_to_empty():
+    from artgen.config import inline_style
+
+    assert inline_style({"name": "a", "prompt": ["x"]}).negative == []
+
+
+@pytest.mark.parametrize(
+    "value, match",
+    [
+        ("soft", "辞書"),
+        ({"prompt": ["x"]}, "name"),
+        ({"name": "", "prompt": ["x"]}, "name"),
+        ({"name": 3, "prompt": ["x"]}, "name"),
+        ({"name": "a/b", "prompt": ["x"]}, "name"),
+        ({"name": "..", "prompt": ["x"]}, "name"),
+        ({"name": ".hid", "prompt": ["x"]}, "name"),
+        ({"name": "あ", "prompt": ["x"]}, "name"),
+        ({"name": "a", "prompt": []}, "prompt"),
+        ({"name": "a"}, "prompt"),
+        ({"name": "a", "prompt": ["x", ""]}, "prompt"),
+        ({"name": "a", "prompt": ["x", 1]}, "prompt"),
+        ({"name": "a", "prompt": ["(x"]}, "カッコ"),
+        ({"name": "a", "prompt": ["x"], "negative": "lowres"}, "negative"),
+        ({"name": "a", "prompt": ["x"], "negative": ["(y"]}, "カッコ"),
+        ({"name": "a", "prompt": ["x"], "extra": 1}, "extra"),
+    ],
+)
+def test_inline_style_rejects_bad_input(value, match):
+    from artgen.config import inline_style
+
+    with pytest.raises(ConfigError, match=match):
+        inline_style(value)
