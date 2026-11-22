@@ -25,9 +25,10 @@ GPU を使う処理は依頼者が Colab で動かし、GPU を使わない処�
 
 | ファイル | 内容 |
 |---|---|
+| `defaults.yaml` | 全キャラクター共通の設定。`style` がデフォルトの画風（今は `thick-line-flat`） |
 | `styles/<name>.yaml` | 画風（プロンプトとネガティブ）。複数あり、`compare_styles` で見比べる |
 | `templates/face.yaml`・`fullbody.yaml` | 絵の種類（大きさ・構図のタグ・書き出しの大きさ・inpaint の既定の範囲） |
-| `characters/<id>/character.yaml` | キャラクターの設定（外見・表情の一覧・描き直す範囲 `inpaint_box`・画風 `style`） |
+| `characters/<id>/character.yaml` | キャラクターの設定（外見・表情の一覧・描き直す範囲 `inpaint_box`）。画風 `style` は、デフォルトと違う画風にするときだけ書く |
 | `characters/<id>/source/` | 採用した元の画像（受け取ったもの） |
 | `characters/<id>/face.png` など・`params.json` | 書き出した受け渡しの形 |
 | `src/artgen/` | `config`（読み込み）・`prompt`（組み立て）・`pnginfo`（条件の読み書き）・`mask`（描き直す範囲）・`selection`（採用した絵の置き場・run の候補探し）・`picker`（ノートブックのボタンの画面）・`intake`（zip の取り込み）・`export`（書き出し）・`forge`（Colab 側） |
@@ -57,7 +58,13 @@ Drive の `illust-asset-forge/` の下の置き場:
    - **まとめ**: `forge.pack()` が採用した絵を zip にして `packs/` に置く。続くセルでダウンロードする
 3. 候補は Drive の `illust-asset-forge/runs/<キャラクター>/<種類>/<日時>/` に保存される
 
-型 face は、**左向き**の頭から胸までの構図で作る。顔は常に左向きにそろえる。候補が右向きに出たときは、顔の候補の画面で「左右反転して採用」を押して左向きにする（反転は顔の元絵だけで、表情・全身には出ない）。画風は、`style="<画風名>"`（または `STYLE`）で、設定の `style` を一時的に差し替えられる。
+型 face は、**左向き**の頭から胸までの構図で作る。顔は常に左向きにそろえる。候補が右向きに出たときは、顔の候補の画面で「左右反転して採用」を押して左向きにする（反転は顔の元絵だけで、表情・全身には出ない）。画風は、次の順で決まる。
+
+1. `style="<画風名>"`（または `STYLE`）を渡せば、その画風（一時的な差し替え。YAML は変わらない）
+2. `character.yaml` に `style` があれば、その画風（そのキャラクターだけの上書き）
+3. どちらも無ければ、`defaults.yaml` の `style`（デフォルト）
+
+表情・全身は、採用した顔の画風を引き継ぐ（1 を渡したときを除く）。
 
 試すときの引数（YAML は書き換えない）:
 
@@ -82,7 +89,7 @@ YAML のタグにカンマを含む重み付きタグを書くときは、引用
 ## 4. Claude 側の流れ
 
 1. `python -m artgen.intake <zip>` で、zip の中身を `characters/<id>/source/` に取り込む。`source/` は丸ごと置き換わり、検査に通らなければ何も書かれない。出力に、取り込んだ・消したファイルと、書き戻すもの（PNG の条件の `overrides`・`selection.json` の範囲 `inpaint_box`）の一覧が出る
-2. 出力の一覧を `character.yaml` などの設定に戻す（`overrides` の `style` は `character.yaml` の `style` へ。範囲は `inpaint_box` へ）
+2. 出力の一覧を `character.yaml` などの設定に戻す（`overrides` の `style` は `character.yaml` の `style` へ。デフォルトと同じ画風は一覧に出ないので書かない。範囲は `inpaint_box` へ）
 3. 必要なら `python -m artgen.pnginfo characters/<id>/source/*.png` で PNG の条件を確かめる
 4. `python -m artgen.export <id>` で書き出す（顔は 256×256 に縮め、`params.json` を作る）
 5. push は依頼者が頼んだときだけ行う
