@@ -51,9 +51,15 @@ def selected_name(params: dict) -> str:
             expression = params.get("expression")
             if not isinstance(expression, str) or not expression:
                 raise ConfigError("条件に source があるのに expression が無い（表情の名前が分からない）")
+            _check_name_part(expression, "条件の expression")
             return f"face_{expression}.png"
         return FACE_NAME
     raise ConfigError(f"条件の template が face・fullbody のどちらでもない: {template!r}")
+
+
+def _check_name_part(value: str, where: str) -> None:
+    if value in {".", ".."} or ".." in value or "/" in value or "\\" in value:
+        raise ConfigError(f"{where}: ファイル名に使えない値: {value!r}")
 
 
 def _check_char_id(value: object, where: str) -> str:
@@ -177,6 +183,11 @@ class SelectionStore:
         now: Callable[[], datetime] = datetime.now,
     ) -> Path:
         ids = self.characters() if char_ids is None else list(char_ids)
+        if char_ids is not None:
+            for cid in ids:
+                d = self.selected_dir / cid
+                if not d.is_dir() or not any(d.glob("*.png")):
+                    raise ConfigError(f"{cid}: 採用した絵が無い")
         files: list[tuple[Path, str]] = []
         for cid in ids:
             d = self.selected_dir / cid
@@ -212,6 +223,13 @@ def run_paths(runs_dir: Path, run_id: str | None = None) -> list[Path]:
 
 
 def find_candidate(runs_dir: Path, key: str | int, run_id: str | None = None) -> Path:
+    """ファイル名（str）は全 run から新しい順に探す（run_id 指定ならその run だけ）。シード（int）は最新の run から探す。"""
+    if isinstance(key, str) and run_id is None:
+        for rid in reversed(run_ids(runs_dir)):
+            hit = Path(runs_dir) / rid / key
+            if hit.is_file():
+                return hit
+        raise ConfigError(f"候補が見つからない: {key}")
     paths = run_paths(runs_dir, run_id)
     if isinstance(key, str):
         found = [p for p in paths if p.name == key]

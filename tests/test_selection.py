@@ -289,3 +289,35 @@ def test_adopt_records_moved_files_and_resets(store, candidate, expression_candi
     assert store.last_replaced == "20261122_100000"
     store.adopt(candidate)
     assert store.last_moved == [] and store.last_replaced is None
+
+
+def test_find_candidate_by_name_searches_older_runs_newest_first(tmp_path):
+    r = tmp_path / "runs"
+    _run(r, "20261120_090000", [("c1_face_1.png", 1), ("c1_face_5.png", 5)])
+    _run(r, "20261121_090000", [("c1_face_5.png", 5)])
+    assert find_candidate(r, "c1_face_1.png").parent.name == "20261120_090000"
+    assert find_candidate(r, "c1_face_5.png").parent.name == "20261121_090000"  # 新しい方
+    assert find_candidate(r, "c1_face_5.png", run_id="20261120_090000").parent.name == "20261120_090000"
+    with pytest.raises(ConfigError, match="見つからない"):
+        find_candidate(r, "c1_face_1.png", run_id="20261121_090000")
+    with pytest.raises(ConfigError, match="見つからない"):
+        find_candidate(r, "nope.png")
+
+
+def test_find_candidate_seed_still_searches_latest_run_only(runs):
+    with pytest.raises(ConfigError, match="見つからない"):
+        find_candidate(runs, 1)
+    assert find_candidate(runs, 1, run_id="20261120_090000").name == "c1_face_1.png"
+
+
+@pytest.mark.parametrize("bad", ["", "../x", "a/b", "a\\b", ".."])
+def test_selected_name_rejects_unsafe_expression(bad):
+    with pytest.raises(ConfigError):
+        selected_name({"template": "face", "source": "face.png", "expression": bad})
+
+
+def test_pack_explicit_id_without_adopted_pngs_is_an_error(store, candidate):
+    store.adopt(candidate)
+    with pytest.raises(ConfigError, match="c9"):
+        store.pack(["c1", "c9"])
+    assert store.pack(["c1"]).is_file()

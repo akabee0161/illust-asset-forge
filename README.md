@@ -56,7 +56,7 @@ Drive の `illust-asset-forge/` の下の置き場:
    - **まとめ**: `forge.pack()` が採用した絵を zip にして `packs/` に置く。続くセルでダウンロードする
 3. 候補は Drive の `illust-asset-forge/runs/<run_id>/` に保存される
 
-型 face は、**左向き**の頭から胸までの構図で作る。右向きにしたいときは、顔の候補の画面で「左右反転して採用」を押す（反転は顔の元絵だけで、表情・全身には出ない）。画風は、`style="<画風名>"`（または `STYLE`）で、設定の `style` を一時的に差し替えられる。
+型 face は、**左向き**の頭から胸までの構図で作る。顔は常に左向きにそろえる。候補が右向きに出たときは、顔の候補の画面で「左右反転して採用」を押して左向きにする（反転は顔の元絵だけで、表情・全身には出ない）。画風は、`style="<画風名>"`（または `STYLE`）で、設定の `style` を一時的に差し替えられる。
 
 試すときの引数（YAML は書き換えない）:
 
@@ -67,7 +67,7 @@ forge.generate(CHARS, "face", extra_negative="hat", remove_negative="lowres")
 forge.generate(CHARS, "face", seeds=[123, 456])  # シードを固定（n は無視される）
 forge.generate(CHARS, "face", style="watercolor")  # 画風を差し替える
 forge.generate(CHARS, "face", guidance=6, steps=30)  # inpaint は strength も
-forge.adopt("<ファイル名>", flip=True)  # 画面を使わずに採用する（flip=True で左右反転）
+forge.adopt("<ファイル名>", flip=True)  # 画面を使わずに採用する（ファイル名は全 run から新しい順に探す。flip=True で左右反転）
 ```
 
 YAML のタグにカンマを含む重み付きタグを書くときは、引用符で囲む（`"(a, b:1.1)"`）。囲まないと YAML が黙って割るので、カッコの対応が取れないタグは `ConfigError` で止まる。
@@ -92,7 +92,7 @@ GPU を使う部分は Claude が動かして確かめられない。次を 1 �
 
 1. **準備・モデルのセル**: エラーなく終わり、`pipe` と `forge` ができる
 2. **画風の見比べ・顔のセル**: 画像が 1 枚ずつ表示され、Drive の `runs/` に PNG ができる。顔の画面のボタンで採用でき、`selected/<id>/face.png` ができる。左向きの構図になっているか、画風の候補が見比べに足りるか
-3. **範囲・表情のセル**: 赤枠を目と口に合わせられ、表情は目と口のあたりだけが変わり、境目が目立たない。`templates/face.yaml` の `inpaint.box` の初期値と既定の枠が合っているか
+3. **範囲・表情のセル**: 赤枠を目と口に合わせられ、表情は目と口のあたりだけが変わり、境目が目立たない。`templates/face.yaml` の `inpaint.box` の初期値が合っているか
 4. **全身のセル**: 832×1216 の全身絵が出て、ボタンで採用できる
 5. **まとめのセル**: zip ができてダウンロードされる。Claude が `python -m artgen.intake` で取り込め、PNG の条件が残っている
 
@@ -107,4 +107,4 @@ GPU を使う部分は Claude が動かして確かめられない。次を 1 �
 uv venv .venv && uv pip install -e '.[dev]' && .venv/bin/pytest
 ```
 
-`src/artgen/forge.py` の `load_pipeline()`・`attach()`・`show_one()`・`show()` と、`picker` のボタンの画面以外は torch・diffusers が無くても動く。
+`src/artgen/forge.py` の `load_pipeline()`・`attach()`・`show_one()`・`show()` だけが torch・diffusers を使う。`picker` のボタンの画面は ipywidgets（Colab には入っている）が要るが、torch は要らない。それ以外は、どちらが無くても動く。
