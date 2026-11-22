@@ -3,6 +3,7 @@ from pathlib import Path
 import pytest
 
 from artgen.config import load_character, load_style, load_template
+from artgen.mask import check_box, check_feather
 from artgen.prompt import build_prompt
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -47,3 +48,20 @@ def test_repo_does_not_mention_the_game():
         text = path.read_text(encoding="utf-8", errors="ignore")
         for word in forbidden:
             assert word not in text, f"{path.relative_to(ROOT)} に {word} がある"
+
+
+def test_face_template_is_left_facing_bust_with_default_box():
+    face = load_template(ROOT, "face")
+    assert "upper body" not in face.prompt
+    assert "upper body" in face.negative
+    assert "looking to the side" in face.prompt
+    assert face.inpaint_box is not None
+    check_box(face.inpaint_box, (face.width, face.height))
+    check_feather(face.inpaint_box, face.inpaint_feather)
+
+
+def test_style_candidates_exist():
+    names = sorted(p.stem for p in (ROOT / "styles").glob("*.yaml"))
+    assert names == ["color-anime", "retro-anime", "soft-painterly", "thick-line-flat", "watercolor"]
+    for name in names:
+        load_style(ROOT, name)

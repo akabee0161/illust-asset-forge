@@ -10,7 +10,7 @@ def make(*, use_items=False, appearance=("brown hair",), style_prompt=("masterpi
     template = Template(
         name="t", width=1024, height=1024, prompt=["portrait"], negative=list(template_negative),
         export_size=256, steps=28, guidance=5, use_items=use_items,
-        inpaint_strength=None, inpaint_feather=None,
+        inpaint_strength=None, inpaint_feather=None, inpaint_box=None,
     )
     character = Character(
         id="c", name="C", style="s", subject=["1boy"], appearance=list(appearance),

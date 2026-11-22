@@ -33,6 +33,7 @@ class Template:
     use_items: bool
     inpaint_strength: float | None
     inpaint_feather: int | None
+    inpaint_box: tuple[int, int, int, int] | None
 
 
 @dataclass(frozen=True)
@@ -120,6 +121,14 @@ class _Reader:
             raise self.fail(where, "数値でない")
         return value
 
+    def box(self, where: str, value: Any) -> tuple[int, int, int, int]:
+        if not isinstance(value, list) or len(value) != 4:
+            raise self.fail(where, "[x0, y0, x1, y1] の 4 つの整数でない")
+        x0, y0, x1, y1 = (self.as_int(where, v, positive=False) for v in value)
+        if x0 < 0 or y0 < 0 or x0 >= x1 or y0 >= y1:
+            raise self.fail(where, f"x0<x1・y0<y1 で 0 以上の四角でない: {value}")
+        return (x0, y0, x1, y1)
+
 
 def load_style(root: Path, name: str) -> Style:
     r = _Reader(root, f"styles/{name}.yaml")
@@ -137,7 +146,7 @@ def load_template(root: Path, name: str) -> Template:
     if not isinstance(use_items, bool):
         raise r.fail("use_items", "true か false でない")
 
-    strength = feather = None
+    strength = feather = inpaint_box = None
     inpaint = r._get("inpaint", None)
     if inpaint is not None:
         if not isinstance(inpaint, dict):
@@ -152,6 +161,8 @@ def load_template(root: Path, name: str) -> Template:
         feather = r.as_int("inpaint.feather", inpaint["feather"], positive=False)
         if feather < 0:
             raise r.fail("inpaint.feather", "0 以上の整数でない")
+        if inpaint.get("box") is not None:
+            inpaint_box = r.box("inpaint.box", inpaint["box"])
 
     guidance = r.number("guidance", r._get("guidance", 5))
     return Template(
@@ -166,6 +177,7 @@ def load_template(root: Path, name: str) -> Template:
         use_items=use_items,
         inpaint_strength=strength,
         inpaint_feather=feather,
+        inpaint_box=inpaint_box,
     )
 
 
@@ -186,12 +198,7 @@ def load_character(root: Path, char_id: str) -> Character:
 
     box = r._get("inpaint_box", None)
     if box is not None:
-        if not isinstance(box, list) or len(box) != 4:
-            raise r.fail("inpaint_box", "[x0, y0, x1, y1] の 4 つの整数でない")
-        x0, y0, x1, y1 = (r.as_int("inpaint_box", v, positive=False) for v in box)
-        if x0 < 0 or y0 < 0 or x0 >= x1 or y0 >= y1:
-            raise r.fail("inpaint_box", f"x0<x1・y0<y1 で 0 以上の四角でない: {box}")
-        box = (x0, y0, x1, y1)
+        box = r.box("inpaint_box", box)
 
     return Character(
         id=char_id,

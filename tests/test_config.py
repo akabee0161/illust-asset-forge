@@ -161,3 +161,19 @@ def test_unbalanced_parens_in_tag_is_rejected_with_quoting_hint(tmp_path):
 def test_quoted_weighted_tag_with_comma_is_accepted(tmp_path):
     write_character(tmp_path, CHARACTER_YAML.replace("appearance: [brown hair]", 'appearance: ["(a, b:1.1)"]'))
     assert load_character(tmp_path, "c1").appearance == ["(a, b:1.1)"]
+
+
+def test_template_reads_inpaint_box(tmp_path):
+    write(tmp_path, "templates/face.yaml",
+          "width: 1024\nheight: 1024\nprompt: [p]\nnegative: []\n"
+          "inpaint: {strength: 0.6, feather: 24, box: [300, 200, 700, 600]}\n")
+    assert load_template(tmp_path, "face").inpaint_box == (300, 200, 700, 600)
+
+
+@pytest.mark.parametrize("box", ["[1, 2, 3]", "[5, 5, 5, 9]", "[-1, 0, 10, 10]", "[0, 0, 1.5, 9]"])
+def test_template_rejects_bad_inpaint_box(tmp_path, box):
+    write(tmp_path, "templates/face.yaml",
+          f"width: 1024\nheight: 1024\nprompt: [p]\nnegative: []\n"
+          f"inpaint: {{strength: 0.6, feather: 24, box: {box}}}\n")
+    with pytest.raises(ConfigError, match=r"templates/face.yaml: inpaint.box: "):
+        load_template(tmp_path, "face")
