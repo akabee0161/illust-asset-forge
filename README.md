@@ -18,6 +18,7 @@ GPU を使う処理は依頼者が Colab で動かし、GPU を使わない処�
 5. [初めて Colab で動かすときの確認](#5-初めて-colab-で動かすときの確認)
 6. [ライセンスと再現の限界](#6-ライセンスと再現の限界)
 7. [テストの実行](#7-テストの実行)
+8. [コピーして使う](#8-コピーして使う)
 
 ---
 
@@ -35,7 +36,7 @@ GPU を使う処理は依頼者が Colab で動かし、GPU を使わない処�
 | `notebooks/run.ipynb` | Colab の入口 |
 | `requirements-colab.txt` | Colab で入れるライブラリ（版を固定） |
 
-Drive の `illust-asset-forge/` の下の置き場:
+`DRIVE_DIR`（既定は Drive の `illust-asset-forge/`）の下の置き場:
 
 | 置き場 | 内容 |
 |---|---|
@@ -47,7 +48,11 @@ Drive の `illust-asset-forge/` の下の置き場:
 
 1. `notebooks/run.ipynb` を Colab で開き、ランタイムを GPU（T4）にする
 2. 各セルは先頭の変数（キャラクターの ID・枚数・表情名・画風名）だけ書き換えて、上から順に実行する
-   - **準備**: Drive をつなぎ、リポジトリを clone（2 回目以降は pull）し、ライブラリを入れる。Claude が設定を直して push した後は、このセルだけ実行し直せば取り込める（モデルは読み込み直さない）
+   - **準備**: Drive をつなぎ、リポジトリを clone（2 回目以降は `REPO_BRANCH` に切り替えてから pull）し、ライブラリを入れる。Claude が設定を直して push した後は、このセルだけ実行し直せば取り込める（モデルは読み込み直さない）。セルの先頭の 4 つの変数で、取る先と置き場を決める
+     - `REPO_URL`: clone するリポジトリ（既定は `https://github.com/akabee0161/illust-asset-forge.git`）。`/content/` の下に同じ名前の clone があって、別のリポジトリのものだったときは、止まって知らせる
+     - `REPO_BRANCH`: 取るブランチ（既定は `main`）。作業ブランチの絵を試すときは、これを書き換えて準備のセルを実行し直す
+     - `SUBDIR`: リポジトリの中の forge のフォルダ（既定は空 = リポジトリの根）
+     - `DRIVE_DIR`: 候補・採用した絵を置く Drive の場所（既定は `/content/drive/MyDrive/illust-asset-forge`）
    - **モデルの読み込み**: `pipe` が無いときだけ `F.load_pipeline()` で読み込む（数分）。メモリ不足で止まったときだけ `F.load_pipeline(low_memory=True)` にする（遅くなる）。続けて `forge = F.attach(pipe, ".")` で、読み込み済みのパイプラインに設定を結びつける
    - **画風の見比べ（任意）**: `forge.compare_styles(CHAR, n=2)` が、同じシードで画風だけを変えた顔を作り、`P.show_styles(paths)` で画風ごとに並べる。気に入った画風名を後ろの `STYLE` に書く
      - **その場で画風を書く**: YAML を書いて push しなくても、`style=` と `compare_styles(styles=[...])` の要素に `{"name": "my-style", "prompt": ["flat color"], "negative": ["gradient"]}` のような辞書を渡せる（`name` は半角英数字・`_`・`-` だけ。画風名と混ぜてよい。同じ名前の `styles/<name>.yaml` があっても、その場の定義が優先する）。定義は PNG の条件の `overrides.style_definition` に残り、顔を採用すれば表情・全身にも引き継がれる。気に入ったら zip（または辞書）を Claude に渡すと、`styles/<name>.yaml` にしてもらえる
@@ -56,7 +61,7 @@ Drive の `illust-asset-forge/` の下の置き場:
    - **表情**: `forge.inpaint(CHAR, "hurt", n=4, on_image=F.show_one)` のあと `P.pick(forge, paths)`。採用した顔と決めた範囲を使うので、パスは書かない
    - **全身**: `forge.generate(CHARS, "fullbody", n=4, on_image=F.show_one)` のあと `P.pick(forge, paths)`
    - **まとめ**: `forge.pack()` が採用した絵を zip にして `packs/` に置く。続くセルでダウンロードする
-3. 候補は Drive の `illust-asset-forge/runs/<キャラクター>/<種類>/<日時>/` に保存される
+3. 候補は `DRIVE_DIR`（既定は Drive の `illust-asset-forge/`）の `runs/<キャラクター>/<種類>/<日時>/` に保存される
 
 型 face は、**左向き**の頭から胸までの構図で作る。顔は常に左向きにそろえる。候補が右向きに出たときは、顔の候補の画面で「左右反転して採用」を押して左向きにする（反転は顔の元絵だけで、表情・全身には出ない）。画風は、次の順で決まる。
 
@@ -116,3 +121,15 @@ uv venv .venv && uv pip install -e '.[dev]' && .venv/bin/pytest
 ```
 
 `src/artgen/forge.py` の `load_pipeline()`・`attach()`・`show_one()`・`show()` だけが torch・diffusers を使う。`picker` のボタンの画面は ipywidgets（Colab には入っている）が要るが、torch は要らない。それ以外は、どちらが無くても動く。
+
+## 8. コピーして使う
+
+このリポジトリは、汎用の部品（エンジン・道具・画風・テンプレート）と見本だけを持つ。作品で使うときは、その作品のリポジトリへ**丸ごとコピー**し、コピーの中で作品のキャラクターを作る。
+
+1. コピーした先の `notebooks/run.ipynb` の準備のセルで、4 つの変数をその作品の値に書き換える
+   - `REPO_URL`: その作品のリポジトリ
+   - `REPO_BRANCH`: Colab に取らせるブランチ（設定を直しても、そのブランチに入るまでは Colab に届かない）
+   - `SUBDIR`: コピーを置いたフォルダ（例: `illust-asset-forge`）
+   - `DRIVE_DIR`: **作品ごとに分ける**。同じ場所を使うと、別の作品の候補や採用した絵が混ざる
+2. `tests/test_notebook.py` の既定値のテストを、書き換えた値に合わせる
+3. 画風・テンプレート・道具を直したときは、コピー元へ戻す候補として控えておく。コピー元の改善は、必要なときに手で持ってくる（自動では届かない）
