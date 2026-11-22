@@ -24,6 +24,10 @@ def _env(widgets, display):
     return widgets, display
 
 
+def _show(widget, text: str) -> None:
+    widget.value = html.escape(text)
+
+
 def _png(image: Image.Image, thumb: int) -> bytes:
     small = image.convert("RGB")
     small.thumbnail((thumb, thumb))
@@ -63,15 +67,21 @@ def pick(forge, paths=None, run_id=None, *, widgets=None, display=None, thumb: i
             image = widgets.Image(value=_thumb_bytes(path, thumb), format="png")
         except OSError as e:
             image = widgets.HTML(value=f"画像を開けない: {html.escape(str(e))}")
-        result = widgets.Label(value="")
+        result = widgets.HTML(value="")  # Label は折り返さないので HTML にする
 
         def adopt(flip, path=path, result=result):
             try:
                 saved = forge.adopt(path, flip=flip)
             except _HANDLED as e:
-                result.value = f"採用できない: {e}"
+                _show(result, f"採用できない: {e}")
+            except Exception as e:  # ボタンの中の例外は画面に出ないので、ここで文字にする
+                _show(result, f"採用できない: {type(e).__name__}: {e}")
             else:
-                result.value = f"採用: {saved.parent.name}/{saved.name}"
+                text = f"採用: {saved.parent.name}/{saved.name}"
+                moved = forge.selected.last_moved
+                if moved:
+                    text += f"（{'・'.join(moved)} を replaced/{forge.selected.last_replaced}/ へ移した）"
+                _show(result, text)
 
         adopt_btn = widgets.Button(description="採用")
         adopt_btn.on_click(lambda _b, adopt=adopt: adopt(False))
@@ -101,7 +111,7 @@ def edit_box(forge, char_id: str, *, widgets=None, display=None) -> None:
         for name, v, limit in zip(("x0", "y0", "x1", "y1"), box, limits)
     ]
     preview = widgets.Image(value=b"", format="png")
-    result = widgets.Label(value="")
+    result = widgets.HTML(value="")
 
     def current():
         return tuple(int(s.value) for s in sliders)
@@ -111,7 +121,7 @@ def edit_box(forge, char_id: str, *, widgets=None, display=None) -> None:
         try:
             preview.value = _png(overlay_box(base, current()), 512)
         except Exception as e:  # 枠が逆転している間など。描けなくても画面は止めない
-            result.value = f"枠を描けない: {e}"
+            _show(result, f"枠を描けない: {e}")
 
     def save(_b):
         b = current()
@@ -120,9 +130,11 @@ def edit_box(forge, char_id: str, *, widgets=None, display=None) -> None:
             check_feather(b, feather)
             forge.selected.save_box(char_id, b)
         except _HANDLED as e:
-            result.value = f"決められない: {e}"
+            _show(result, f"決められない: {e}")
+        except Exception as e:
+            _show(result, f"決められない: {type(e).__name__}: {e}")
         else:
-            result.value = f"決めた: {b}"
+            _show(result, f"決めた: {b}")
 
     for s in sliders:
         s.observe(redraw, names="value")

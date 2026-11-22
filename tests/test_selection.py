@@ -277,3 +277,15 @@ def test_adopt_expression_without_recorded_hash_is_not_blocked(store, candidate,
     face = store.adopt(candidate)
     expr = _expression_from(face, tmp_path, with_hash=False)
     assert store.adopt(expr).name == "face_hurt.png"
+
+
+def test_adopt_records_moved_files_and_resets(store, candidate, expression_candidate):
+    store.adopt(candidate)
+    store.adopt(expression_candidate)
+    store.save_box("c1", (1, 2, 300, 400))
+    assert store.last_moved == []
+    store.adopt(candidate, now=lambda: datetime(2026, 11, 22, 10, 0, 0))
+    assert sorted(store.last_moved) == ["face_hurt.png", "selection.json"]
+    assert store.last_replaced == "20261122_100000"
+    store.adopt(candidate)
+    assert store.last_moved == [] and store.last_replaced is None

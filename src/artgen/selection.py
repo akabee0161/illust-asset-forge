@@ -75,6 +75,9 @@ class SelectionStore:
     def __init__(self, selected_dir: Path, packs_dir: Path):
         self.selected_dir = Path(selected_dir)
         self.packs_dir = Path(packs_dir)
+        # 直近の adopt で replaced/ へ移したファイル名と、移した先のフォルダ名（画面に出す用）
+        self.last_moved: list[str] = []
+        self.last_replaced: str | None = None
 
     def face_path(self, char_id: str) -> Path:
         return self.selected_dir / char_id / FACE_NAME
@@ -93,6 +96,7 @@ class SelectionStore:
         now: Callable[[], datetime] = datetime.now,
     ) -> Path:
         candidate = Path(candidate)
+        self.last_moved, self.last_replaced = [], None
         # 何も書く前に検査する
         params = read_params(candidate)
         name = selected_name(params)
@@ -132,8 +136,10 @@ class SelectionStore:
             n += 1
             dest = base / f"{stamp}_{n}"
         dest.mkdir(parents=True)
+        self.last_replaced = dest.name
         for p in targets:
             shutil.move(str(p), dest / p.name)
+            self.last_moved.append(p.name)
             print(f"{char_dir.name}/{p.name} を replaced/{dest.name}/ へ移した")
 
     def read_box(self, char_id: str) -> Box | None:

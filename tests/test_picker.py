@@ -97,7 +97,7 @@ def test_pick_adopt_button_adopts(forge, fake_widgets):
     assert [b.description for b in buttons] == ["採用", "左右反転して採用"] * 2
     buttons[1].click()
     assert read_params(forge.selected.face_path("c1"))["flipped"] is True
-    assert "採用: " in fake_widgets.created("Label")[0].value
+    assert any(h.value.startswith("採用: ") for h in fake_widgets.created("HTML"))
 
 
 def test_pick_defaults_to_latest_run(forge, fake_widgets):
@@ -118,7 +118,7 @@ def test_pick_shows_error_text_instead_of_raising(forge, fake_widgets):
     pick(forge, [p], widgets=fake_widgets, display=noop)
     p.unlink()
     fake_widgets.created("Button")[0].click()
-    assert "採用できない: " in fake_widgets.created("Label")[-1].value
+    assert "採用できない: " in fake_widgets.created("HTML")[-1].value
 
 
 def test_edit_box_saves_selection(forge, fake_widgets):
@@ -139,7 +139,7 @@ def test_edit_box_rejects_bad_box(forge, fake_widgets):
     x1.value = x0.value + 16  # feather 24 の 2 倍より狭い
     fake_widgets.created("Button")[0].click()
     assert forge.selected.read_box("c1") is None
-    assert "決められない: " in fake_widgets.created("Label")[-1].value
+    assert "決められない: " in fake_widgets.created("HTML")[-1].value
 
 
 def test_edit_box_without_face_says_what_to_do(forge, fake_widgets):
@@ -179,7 +179,7 @@ def test_edit_box_rejects_box_sticking_out_of_image(forge, fake_widgets):
     x1.value = 2000  # スライダーの上限を越えた値（描画側が通しても保存で止まる）
     fake_widgets.created("Button")[0].click()
     assert forge.selected.read_box("c1") is None
-    assert "決められない: " in fake_widgets.created("Label")[-1].value
+    assert "決められない: " in fake_widgets.created("HTML")[-1].value
 
 
 def test_edit_box_redraw_clears_stale_result(forge, fake_widgets):
@@ -187,7 +187,7 @@ def test_edit_box_redraw_clears_stale_result(forge, fake_widgets):
     edit_box(forge, "c1", widgets=fake_widgets, display=noop)
     x1 = fake_widgets.created("IntSlider")[2]
     fake_widgets.created("Button")[0].click()
-    label = fake_widgets.created("Label")[-1]
+    label = fake_widgets.created("HTML")[-1]
     assert label.value.startswith("決めた")
     x1.value = 500
     assert label.value == ""
@@ -208,3 +208,34 @@ def test_show_styles_tolerates_missing_style_and_seed(fake_widgets, tmp_path):
     show_styles([p], display=noop, widgets=fake_widgets, thumb=32)
     labels = [h.value for h in fake_widgets.created("HTML")]
     assert any("画風不明" in v for v in labels) and any("シード不明" in v for v in labels)
+
+
+def test_pick_reports_moved_expressions_on_readopt(forge, fake_widgets):
+    forge.adopt(forge.generate("c1", "face", seeds=[1])[0])
+    forge.adopt(forge.inpaint("c1", "hurt", seeds=[3])[0])
+    forge.selected.save_box("c1", (10, 10, 500, 500))
+    new_face = forge.generate("c1", "face", seeds=[2])[0]
+    pick(forge, [new_face], widgets=fake_widgets, display=noop)
+    fake_widgets.created("Button")[0].click()
+    text = fake_widgets.created("HTML")[-1].value
+    assert "face_hurt.png" in text and "selection.json" in text and "replaced/" in text
+
+
+def test_pick_shows_unexpected_exception_instead_of_vanishing(forge, fake_widgets, monkeypatch):
+    p = forge.generate("c1", "face", seeds=[1])[0]
+    pick(forge, [p], widgets=fake_widgets, display=noop)
+
+    def boom(*a, **k):
+        raise ValueError("想定外")
+
+    monkeypatch.setattr(forge, "adopt", boom)
+    fake_widgets.created("Button")[0].click()
+    assert "採用できない: ValueError: 想定外" in fake_widgets.created("HTML")[-1].value
+
+
+def test_result_text_is_html_escaped(forge, fake_widgets, monkeypatch):
+    p = forge.generate("c1", "face", seeds=[1])[0]
+    pick(forge, [p], widgets=fake_widgets, display=noop)
+    monkeypatch.setattr(forge, "adopt", lambda *a, **k: (_ for _ in ()).throw(ValueError("<b>x</b>")))
+    fake_widgets.created("Button")[0].click()
+    assert "<b>" not in fake_widgets.created("HTML")[-1].value
