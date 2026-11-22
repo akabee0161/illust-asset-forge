@@ -143,6 +143,12 @@ class _Reader:
         return parse_box(self.rel, where, value)
 
 
+def load_default_style(root: Path) -> str:
+    """全キャラクター共通のデフォルトの画風名（defaults.yaml の style）。
+    character.yaml に style が無いときに使う。"""
+    return _Reader(root, "defaults.yaml").string("style")
+
+
 def load_style(root: Path, name: str) -> Style:
     r = _Reader(root, f"styles/{name}.yaml")
     return Style(name=name, prompt=r.tags("prompt"), negative=r.tags("negative"))
@@ -243,7 +249,7 @@ def load_character(root: Path, char_id: str) -> Character:
     return Character(
         id=char_id,
         name=r.string("name"),
-        style=r.string("style"),
+        style=r.string("style") if "style" in r.data else load_default_style(root),
         subject=r.tags("subject"),
         appearance=r.tags("appearance"),
         outfit=r.tags("outfit"),
