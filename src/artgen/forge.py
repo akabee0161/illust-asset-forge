@@ -18,6 +18,7 @@ from artgen.config import ConfigError, load_character, load_style, load_template
 from artgen.mask import check_box, check_feather, feather_composite, make_mask
 from artgen.pnginfo import MissingParamsError, read_params, save_png
 from artgen.prompt import Overrides, build_prompt
+from artgen.selection import SelectionStore
 
 MODEL_NAME = "cagliostrolab/animagine-xl-4.0"
 SAMPLER_NAME = "Euler a"
@@ -35,6 +36,8 @@ class Forge:
         env: dict[str, str],
         *,
         cleanup: Callable[[], None] = lambda: None,
+        selected_dir: Path | None = None,
+        packs_dir: Path | None = None,
     ):
         self.pipe = pipe
         self.root = Path(root)
@@ -42,6 +45,10 @@ class Forge:
         self.make_generator = make_generator
         self.env = env
         self.cleanup = cleanup
+        self.selected = SelectionStore(
+            Path(selected_dir) if selected_dir is not None else self.out_dir.parent / "selected",
+            Path(packs_dir) if packs_dir is not None else self.out_dir.parent / "packs",
+        )
 
     # --- 共通 ---------------------------------------------------------
 
@@ -97,15 +104,17 @@ class Forge:
             **self.env,
         }
 
-    def _run(self, seed_list, run_dir: Path, build, on_image) -> list[Path]:
-        """シードごとに生成して保存する。1 枚保存するたびに on_image を呼ぶ。
+    def _run(self, jobs, run_dir: Path, build, on_image) -> list[Path]:
+        """ジョブ（シード、または (キャラクター, シード) など）ごとに生成して保存する。
+        1 枚保存するたびに on_image を呼ぶ。
 
         ■ で止められたら、保存済みの分を返す（Drive にも残っている）。
+        on_image が KeyboardInterrupt を投げた場合も、その 1 枚は保存済みとして含める。
         """
         paths: list[Path] = []
         try:
-            for seed in seed_list:
-                image, params, path = build(seed)
+            for job in jobs:
+                image, params, path = build(job)
                 save_png(image, path, params)
                 paths.append(path)
                 self._finish_one()
@@ -121,9 +130,68 @@ class Forge:
 
     # --- 生成 ---------------------------------------------------------
 
+    def resolve_style(self, char_id: str, style: str | None, inherit: bool) -> tuple[str, str]:
+        """使う画風と、その出どころ（"引数" | "採用した顔" | "設定"）を返す。"""
+        if style is not None:
+            return style, "引数"
+        if inherit:
+            adopted = self.selected.face_style(char_id)
+            if adopted is not None:
+                print(f"{char_id}: 画風 {adopted}（採用した顔に合わせた）")
+                return adopted, "採用した顔"
+        return load_character(self.root, char_id).style, "設定"
+
+    def _text2img_batch(
+        self, entries, template, seed_list, overrides, guidance, steps, file_name, on_image,
+    ) -> list[Path]:
+        """entries（(キャラクター, 画風名) の一覧）を順に、それぞれ seed_list の全シードで生成する。
+
+        GPU を回す前に、全 entries の設定・画風・プロンプトを組み立てて検証する。
+        """
+        tpl = load_template(self.root, template)
+        guidance_used = tpl.guidance if guidance is None else guidance
+        steps_used = tpl.steps if steps is None else steps
+        self._check_sampling(guidance_used, steps_used)
+        plans = {}
+        for char_id, style_name in entries:
+            character = load_character(self.root, char_id)
+            style = load_style(self.root, style_name)
+            prompt = build_prompt(style, tpl, character, overrides=overrides)
+            recorded = self._recorded_overrides(
+                overrides, guidance=guidance, steps=steps,
+                style=style_name if style_name != character.style else None,
+            )
+            plans[(char_id, style_name)] = (character, style, prompt, recorded)
+
+        run_id = datetime.now().strftime("%Y%m%d_%H%M%S")
+        run_dir = self.out_dir / run_id
+
+        def build(job):
+            entry, seed = job
+            character, style, prompt, recorded = plans[entry]
+            image = self.pipe.text2img(
+                prompt=prompt.positive,
+                negative_prompt=prompt.negative,
+                width=tpl.width,
+                height=tpl.height,
+                guidance_scale=guidance_used,
+                num_inference_steps=steps_used,
+                generator=self.make_generator(seed),
+                output_type="pil",
+            ).images[0]
+            params = self._base_params(
+                prompt=prompt, template=tpl, style=style, character=character,
+                expression=character.default_expression, overrides=recorded, seed=seed,
+                guidance=guidance_used, steps=steps_used, run_id=run_id,
+            )
+            return image, params, run_dir / file_name(*entry, seed)
+
+        jobs = [(entry, seed) for entry in entries for seed in seed_list]
+        return self._run(jobs, run_dir, build, on_image)
+
     def generate(
         self,
-        char_id: str,
+        char_ids: str | list[str],
         template: str,
         n: int = 4,
         seeds: list[int] | None = None,
@@ -133,41 +201,45 @@ class Forge:
         remove_negative: str = "",
         guidance: float | None = None,
         steps: int | None = None,
+        style: str | None = None,
         on_image: Callable[[Path], None] | None = None,
     ) -> list[Path]:
-        character = load_character(self.root, char_id)
-        style = load_style(self.root, character.style)
-        tpl = load_template(self.root, template)
+        if isinstance(char_ids, str):
+            char_ids = [char_ids]
+        char_ids = list(char_ids)
+        if not char_ids:
+            raise ConfigError("char_ids: 空の一覧")
         overrides = Overrides.from_args(extra, remove, extra_negative, remove_negative)
-        prompt = build_prompt(style, tpl, character, overrides=overrides)
-        recorded = self._recorded_overrides(overrides, guidance=guidance, steps=steps)
-        guidance = tpl.guidance if guidance is None else guidance
-        steps = tpl.steps if steps is None else steps
-        self._check_sampling(guidance, steps)
+        entries = [
+            (c, self.resolve_style(c, style, template != "face")[0]) for c in char_ids
+        ]
         seed_list = self._seeds(n, seeds)
+        return self._text2img_batch(
+            entries, template, seed_list, overrides, guidance, steps,
+            lambda c, _style, seed: f"{c}_{template}_{seed}.png", on_image,
+        )
 
-        run_id = datetime.now().strftime("%Y%m%d_%H%M%S")
-        run_dir = self.out_dir / run_id
-
-        def build(seed: int):
-            image = self.pipe.text2img(
-                prompt=prompt.positive,
-                negative_prompt=prompt.negative,
-                width=tpl.width,
-                height=tpl.height,
-                guidance_scale=guidance,
-                num_inference_steps=steps,
-                generator=self.make_generator(seed),
-                output_type="pil",
-            ).images[0]
-            params = self._base_params(
-                prompt=prompt, template=tpl, style=style, character=character,
-                expression=character.default_expression, overrides=recorded, seed=seed,
-                guidance=guidance, steps=steps, run_id=run_id,
-            )
-            return image, params, run_dir / f"{char_id}_{template}_{seed}.png"
-
-        return self._run(seed_list, run_dir, build, on_image)
+    def compare_styles(
+        self,
+        char_id: str,
+        template: str = "face",
+        styles: list[str] | None = None,
+        seeds: list[int] | None = None,
+        n: int = 2,
+        on_image: Callable[[Path], None] | None = None,
+    ) -> list[Path]:
+        """同じシードで画風だけを変えて並べる。styles が None なら styles/ の全部（名前順）。"""
+        if styles is None:
+            styles = sorted(p.stem for p in (self.root / "styles").glob("*.yaml"))
+        styles = list(styles)
+        if not styles:
+            raise ConfigError("styles: 画風が 1 つも無い")
+        seed_list = self._seeds(n, seeds)
+        return self._text2img_batch(
+            [(char_id, s) for s in styles], template, seed_list,
+            Overrides.from_args("", "", "", ""), None, None,
+            lambda c, s, seed: f"{c}_{template}_{s}_{seed}.png", on_image,
+        )
 
     # --- 表情（inpaint） -----------------------------------------------
 

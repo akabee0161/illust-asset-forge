@@ -51,6 +51,8 @@ def repo(tmp_path):
     write(tmp_path, "templates/fullbody.yaml",
           "width: 832\nheight: 1216\nprompt: [full body]\nnegative: []\nexport_size: null\n")
     write(tmp_path, "characters/c1/character.yaml", CHARACTER.format(box="[100, 100, 400, 300]"))
+    write(tmp_path, "characters/c2/character.yaml", CHARACTER.format(box="[100, 100, 400, 300]"))
+    write(tmp_path, "styles/t.yaml", "prompt: [watercolor]\nnegative: []\n")
     write(tmp_path, "characters/nobox/character.yaml", CHARACTER.format(box="null"))
     return tmp_path
 
@@ -375,3 +377,54 @@ def test_show_one_displays_image_and_seed(forge, monkeypatch, capsys):
     out = capsys.readouterr().out
     assert len(shown) == 1 and max(shown[0].size) == 128
     assert "c1_face_7.png" in out and "seed=7" in out
+
+
+def test_generate_multiple_characters_in_one_run(forge):
+    paths = forge.generate(["c1", "c2"], "face", seeds=[7, 8])
+    assert [p.name for p in paths] == ["c1_face_7.png", "c1_face_8.png", "c2_face_7.png", "c2_face_8.png"]
+    assert len({p.parent for p in paths}) == 1
+
+
+def test_generate_checks_all_characters_before_gpu(forge, pipe):
+    with pytest.raises(ConfigError, match="characters/nope/character.yaml"):
+        forge.generate(["c1", "nope"], "face", seeds=[1])
+    assert pipe.calls == []
+
+
+def test_generate_interrupted_returns_saved_paths(forge, pipe):  # Review Focus 2
+    def stop_on_third(path):
+        if len(pipe.calls) == 3:
+            raise KeyboardInterrupt
+
+    paths = forge.generate(["c1", "c2"], "face", seeds=[7, 8], on_image=stop_on_third)
+    assert [p.name for p in paths] == ["c1_face_7.png", "c1_face_8.png", "c2_face_7.png"]
+
+
+def test_style_argument_overrides_and_is_recorded(forge, pipe):
+    p = forge.generate("c1", "face", seeds=[1], style="t")[0]
+    assert "watercolor" in pipe.calls[0][1]["prompt"]
+    assert read_params(p)["style"] == "t"
+    assert read_params(p)["overrides"]["style"] == "t"
+
+
+def test_same_style_as_config_is_not_recorded(forge):
+    p = forge.generate("c1", "face", seeds=[1], style="s")[0]
+    assert "style" not in read_params(p)["overrides"]
+
+
+def test_fullbody_inherits_adopted_face_style(forge, pipe, capsys):
+    face = forge.generate("c1", "face", seeds=[1], style="t")[0]
+    forge.selected.adopt(face)
+    p = forge.generate("c1", "fullbody", seeds=[2])[0]
+    assert read_params(p)["style"] == "t"
+    assert "採用した顔" in capsys.readouterr().out
+
+
+def test_face_generation_does_not_inherit(forge):
+    forge.selected.adopt(forge.generate("c1", "face", seeds=[1], style="t")[0])
+    assert read_params(forge.generate("c1", "face", seeds=[2])[0])["style"] == "s"
+
+
+def test_compare_styles_same_seeds_per_style(forge):
+    paths = forge.compare_styles("c1", styles=["s", "t"], seeds=[5, 6])
+    assert [p.name for p in paths] == ["c1_face_s_5.png", "c1_face_s_6.png", "c1_face_t_5.png", "c1_face_t_6.png"]
