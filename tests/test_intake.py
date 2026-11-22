@@ -348,3 +348,30 @@ def test_main_reports_decompression_bomb(repo, pack_zip, capsys, monkeypatch):
     monkeypatch.setattr(Image, "MAX_IMAGE_PIXELS", 10)
     assert main([str(pack_zip), "--root", str(repo)]) == 1
     assert "取り込めない" in capsys.readouterr().out
+
+
+def _face_adopted_from(selected, flip):
+    from artgen.selection import file_sha256
+
+    image = Image.new("RGB", (8, 8), (1, 2, 3))
+    cand = selected.parent / "cand_face.png"
+    save_png(image, cand, {"seed": 1, "template": "face", "character": "c1", "overrides": {}})
+    params = {"seed": 1, "template": "face", "character": "c1", "overrides": {}, "flipped": flip}
+    if not flip:
+        params["adopted_from_sha256"] = file_sha256(cand)
+    save_png(image, selected / "c1/face.png", params)
+    return cand
+
+
+def test_install_accepts_expression_made_from_adopted_candidate(repo, selected):
+    cand = _face_adopted_from(selected, flip=False)
+    _expression_with_hash(selected / "c1/face_hurt.png", cand)
+    [r] = install_selection(repo, selected)
+    assert "face_hurt.png" in r.installed
+
+
+def test_install_rejects_expression_made_from_flipped_candidate(repo, selected):
+    cand = _face_adopted_from(selected, flip=True)
+    _expression_with_hash(selected / "c1/face_hurt.png", cand)
+    with pytest.raises(ConfigError, match="今の顔から作っていない"):
+        install_selection(repo, selected)

@@ -321,3 +321,29 @@ def test_pack_explicit_id_without_adopted_pngs_is_an_error(store, candidate):
     with pytest.raises(ConfigError, match="c9"):
         store.pack(["c1", "c9"])
     assert store.pack(["c1"]).is_file()
+
+
+def test_adopt_expression_made_from_adopted_candidate(store, candidate, tmp_path):
+    """候補の顔を source に表情を作り、その候補を採用した場合は通す。"""
+    expr = _expression_from(candidate, tmp_path)
+    store.adopt(candidate)
+    assert store.adopt(expr).name == "face_hurt.png"
+    assert read_params(store.face_path("c1"))["adopted_from_sha256"]
+
+
+def test_adopt_expression_made_from_candidate_rejected_when_flipped(store, candidate, tmp_path):
+    expr = _expression_from(candidate, tmp_path)
+    store.adopt(candidate, flip=True)
+    assert "adopted_from_sha256" not in read_params(store.face_path("c1"))
+    with pytest.raises(ConfigError, match="今の顔から作っていない"):
+        store.adopt(expr)
+
+
+def test_adopt_expression_made_from_older_candidate_is_rejected(
+    store, candidate, half_red_candidate, tmp_path
+):
+    expr = _expression_from(candidate, tmp_path)
+    store.adopt(candidate)
+    store.adopt(half_red_candidate)
+    with pytest.raises(ConfigError, match="今の顔から作っていない"):
+        store.adopt(expr)

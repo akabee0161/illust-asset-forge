@@ -35,7 +35,14 @@ def check_expression_source(expression_params: dict, face: Path, where: str) -> 
     face = Path(face)
     if not face.is_file():
         raise ConfigError(f"{where}: 表情の元になった顔（{FACE_NAME}）が無い。顔を採用してから表情を作る")
-    if file_sha256(face) != expected:
+    accepted = {file_sha256(face)}
+    try:
+        adopted_from = read_params(face).get("adopted_from_sha256")
+    except (MissingParamsError, OSError):
+        adopted_from = None
+    if isinstance(adopted_from, str):
+        accepted.add(adopted_from)  # 反転なしで採用した候補の元の絵
+    if expected not in accepted:
         raise ConfigError(
             f"{where}: この表情は今の顔から作っていない（顔を採用し直したか、別の絵を source に渡したため）。"
             "今の顔で表情を作り直してから採用する"
@@ -120,7 +127,12 @@ class SelectionStore:
         # 先に新しい絵を一時ファイルへ保存する。失敗しても前の採用は動かさない
         tmp = char_dir / f".{name}.new"
         try:
-            save_png(image, tmp, {**params, "flipped": bool(flip)})
+            saved = {k: v for k, v in params.items() if k != "adopted_from_sha256"}
+            saved["flipped"] = bool(flip)
+            if name == FACE_NAME and not flip:
+                # 候補から作った表情を、その候補を採用した顔にも認めるための記録
+                saved["adopted_from_sha256"] = file_sha256(candidate)
+            save_png(image, tmp, saved)
             if name == FACE_NAME:
                 self._move_aside(char_dir, now())
             os.replace(tmp, char_dir / name)
