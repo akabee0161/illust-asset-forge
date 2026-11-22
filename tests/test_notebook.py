@@ -58,3 +58,23 @@ def test_notebook_purges_cached_artgen_modules_before_import():
     setup = next(c for c in cells if "from artgen import forge" in c)
     assert "sys.modules" in setup
     assert setup.index("sys.modules") < setup.index("from artgen import forge")
+
+
+def test_fullbody_cell_defines_its_own_chars():
+    # 再起動の後に、このセルだけを実行しても動く
+    _, cells = code_cells()
+    fullbody = next(c for c in cells if '"fullbody"' in c and "forge.generate(" in c)
+    assert fullbody.lstrip().startswith("CHARS = [")
+
+
+def test_notebook_headings_are_numbered_in_order():
+    import re
+
+    nb, _ = code_cells()
+    numbers = []
+    for c in nb["cells"]:
+        if c["cell_type"] == "markdown":
+            m = re.match(r"## (\w+)\.", "".join(c["source"]))
+            if m:
+                numbers.append(m.group(1))
+    assert numbers == [str(i) for i in range(1, len(numbers) + 1)]
