@@ -27,7 +27,7 @@
 - 候補の置き場は `runs/<id>/<種類>/<日時>/` になった。古い `runs/<日時>/` のフォルダは `P.pick(forge, run_id="<日時>")` だけで開ける（char・kind では絞れない）
 - 画風 soft-cel を足した。画風はその場で辞書に書いても使える（`style=` と `compare_styles(styles=[...])`）
 - 画風 thick-line-flat を、Colab の見比べの結果で洗練した（設計は `docs/superpowers/specs/2026-11-22-thick-line-flat-refine-design.md`）。元の定義に、髪の描き込み（`messy hair` など 5 つ）と鮮やかすぎる色（`colorful` など 3 つ）を避けるネガティブを足した。色の指定で服の色が設定より薄くなることがあるが、依頼者は許容した。元の定義で出た当たりの絵は、セラの顔・シード 3034254740（コミット c4602a6）
-- 画風は全キャラクター共通のデフォルト（`defaults.yaml` の `style`、今は thick-line-flat）を使う。`character.yaml` の `style` は、1 人だけ別の画風にするときだけ書く（設計は `docs/superpowers/specs/2026-11-22-default-style-design.md`）。セラ・ボルグとも `style` を書かず、デフォルトに従う。ボルグの採用・書き出し済みの絵は color-anime のままで、依頼者が新しい画風で作り直して差し替える
+- 画風は全キャラクター共通のデフォルト（`defaults.yaml` の `style`、今は thick-line-flat）を使う。`character.yaml` の `style` は、1 人だけ別の画風にするときだけ書く（設計は `docs/superpowers/specs/2026-11-22-default-style-design.md`）。セラ・ボルグとも `style` を書かず、デフォルトに従う。ボルグの採用・書き出し済みの絵は color-anime のままで、依頼者が新しい画風で作り直して差し替える。顔を作り直す前に作った表情・全身は、採用した顔を引き継いで color-anime になり、取り込むと書き戻しの一覧に `style: color-anime` が出る。それは `character.yaml` に戻さない
 - 生成は `lpw_stable_diffusion_xl` を使うので、75 トークンを超えるプロンプトも切り詰められずに届き、`(tag:1.3)` の重みも効くと判断している（lpw のソースは未確認。標準の SDXL パイプラインは 77 トークンで切り詰める。ボルグの顔のプロンプトは約 101 トークンある）
 - ally06（セラ）の `character.yaml` は仮の設定。外見は役割とテーマの色から推測で書いたので、依頼者が直してよい
 - ボルグ（`characters/ally05/`）: 顔（シード 1630744298）・表情 `hurt`（シード 135213639）・全身（シード 4074111561）を採用して書き出し済み。`inpaint_box` は `[440, 170, 820, 600]`
