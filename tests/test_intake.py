@@ -398,3 +398,23 @@ def test_install_rejects_invalid_box_in_expression_png(repo, selected, box):
         install_selection(repo, selected)
     assert {p.name: p.read_bytes() for p in (repo / "characters/c1/source").iterdir()} == before
     assert not (repo / "characters/c1/.source.new").exists()
+
+
+def test_install_restores_source_when_interrupted_right_after_backup(repo, selected, monkeypatch):
+    from pathlib import Path
+
+    before = {p.name: p.read_bytes() for p in (repo / "characters/c1/source").iterdir()}
+    real = Path.rename
+
+    def rename(self, target):
+        result = real(self, target)
+        if self.name == "source" and self.parent.name == "c1":
+            raise KeyboardInterrupt  # 退避のすぐ後
+        return result
+
+    monkeypatch.setattr(Path, "rename", rename)
+    with pytest.raises(KeyboardInterrupt):
+        install_selection(repo, selected)
+    assert {p.name: p.read_bytes() for p in (repo / "characters/c1/source").iterdir()} == before
+    assert not (repo / "characters/c1/.source.new").exists()
+    assert not (repo / "characters/c1/.source.old").exists()

@@ -71,25 +71,25 @@ def _swap_all(items: list[tuple[str, list[Path]]], root: Path) -> None:
             shutil.rmtree(staging, ignore_errors=True)
         raise
 
-    done: list[tuple[Path, Path, bool]] = []  # (source_dir, backup, had_old)
+    # 入れ替えに取りかかった順。途中で止まった 1 件も含め、失敗・中断時はここから元へ戻す
+    started: list[tuple[Path, Path, bool]] = []  # (source_dir, backup, had_old)
     try:
         for staging, source_dir, backup in staged:
             shutil.rmtree(backup, ignore_errors=True)
             had_old = source_dir.exists()
+            started.append((source_dir, backup, had_old))  # 退避の前に登録する
             if had_old:
                 source_dir.rename(backup)
-            try:
-                staging.rename(source_dir)
-            except BaseException:
-                if had_old:
-                    backup.rename(source_dir)  # このキャラクターの source を失わない
-                raise
-            done.append((source_dir, backup, had_old))
+            staging.rename(source_dir)
     except BaseException:
-        for source_dir, backup, had_old in reversed(done):
-            shutil.rmtree(source_dir, ignore_errors=True)
+        for source_dir, backup, had_old in reversed(started):
             if had_old:
-                backup.rename(source_dir)
+                if backup.exists():  # 退避済み。新しい source を捨てて戻す
+                    shutil.rmtree(source_dir, ignore_errors=True)
+                    backup.rename(source_dir)
+                # 退避前に止まったなら、元の source はそのまま残っている
+            else:
+                shutil.rmtree(source_dir, ignore_errors=True)
         for staging, _, _ in staged:
             shutil.rmtree(staging, ignore_errors=True)
         raise
