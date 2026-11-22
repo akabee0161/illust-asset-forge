@@ -135,7 +135,13 @@ class Forge:
         if style is not None:
             return style, "引数"
         if inherit:
-            adopted = self.selected.face_style(char_id)
+            try:
+                adopted = self.selected.face_style(char_id)
+            except MissingParamsError as e:
+                raise ConfigError(
+                    f"{char_id}: 採用した顔 {self.selected.face_path(char_id).name} に生成の条件が無く、画風が分からない"
+                    f"（{e}）。顔を候補からもう一度採用し直す"
+                ) from e
             if adopted is not None:
                 print(f"{char_id}: 画風 {adopted}（採用した顔に合わせた）")
                 return adopted, "採用した顔"
@@ -209,6 +215,7 @@ class Forge:
         char_ids = list(char_ids)
         if not char_ids:
             raise ConfigError("char_ids: 空の一覧")
+        _check_unique(char_ids, "char_ids")
         overrides = Overrides.from_args(extra, remove, extra_negative, remove_negative)
         entries = [
             (c, self.resolve_style(c, style, template != "face")[0]) for c in char_ids
@@ -234,6 +241,7 @@ class Forge:
         styles = list(styles)
         if not styles:
             raise ConfigError("styles: 画風が 1 つも無い")
+        _check_unique(styles, "styles")
         seed_list = self._seeds(n, seeds)
         return self._text2img_batch(
             [(char_id, s) for s in styles], template, seed_list,
@@ -263,10 +271,12 @@ class Forge:
         self, candidate: str | int | Path, flip: bool = False, run_id: str | None = None,
     ) -> Path:
         """候補を採用する。Path で存在すればそれを、そうでなければ最新の run（run_id 指定可）から探す。"""
-        if isinstance(candidate, Path) and candidate.is_file():
+        if isinstance(candidate, Path):
+            if not candidate.is_file():
+                raise ConfigError(f"ファイルが無い: {candidate}")
             path = candidate
         else:
-            path = find_candidate(self.out_dir, str(candidate) if isinstance(candidate, Path) else candidate, run_id)
+            path = find_candidate(self.out_dir, candidate, run_id)
         return self.selected.adopt(path, flip=flip)
 
     def pack(self, char_ids: list[str] | None = None) -> Path:
@@ -371,6 +381,14 @@ class Forge:
             return result, params, run_dir / f"{char_id}_face_{expression}_{seed}.png"
 
         return self._run(seed_list, run_dir, build, on_image)
+
+
+def _check_unique(values: list[str], label: str) -> None:
+    seen: set[str] = set()
+    for v in values:
+        if v in seen:
+            raise ConfigError(f"{label}: 同じものが重複している: {v}")
+        seen.add(v)
 
 
 def _git_commit(root: Path) -> str:

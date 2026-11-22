@@ -159,3 +159,52 @@ def test_show_styles_one_composite_and_row_labels(forge, fake_widgets):
         assert im.size == (64, 64)  # 2 列 x 2 行
     labels = [h.value for h in fake_widgets.created("HTML")]
     assert any("<b>s</b>" in v for v in labels) and any("<b>t</b>" in v for v in labels)
+
+
+def test_edit_box_slider_max_follows_face_size(forge, fake_widgets):
+    from artgen.pnginfo import save_png
+
+    face = forge.adopt(forge.generate("c1", "face", seeds=[1])[0])
+    params = read_params(face)
+    save_png(Image.new("RGB", (512, 640)), face, params)
+    edit_box(forge, "c1", widgets=fake_widgets, display=noop)
+    x0, y0, x1, y1 = fake_widgets.created("IntSlider")
+    assert (x0.max, y0.max, x1.max, y1.max) == (512, 640, 512, 640)
+
+
+def test_edit_box_rejects_box_sticking_out_of_image(forge, fake_widgets):
+    forge.adopt(forge.generate("c1", "face", seeds=[1])[0])
+    edit_box(forge, "c1", widgets=fake_widgets, display=noop)
+    x1 = fake_widgets.created("IntSlider")[2]
+    x1.value = 2000  # スライダーの上限を越えた値（描画側が通しても保存で止まる）
+    fake_widgets.created("Button")[0].click()
+    assert forge.selected.read_box("c1") is None
+    assert "決められない: " in fake_widgets.created("Label")[-1].value
+
+
+def test_edit_box_redraw_clears_stale_result(forge, fake_widgets):
+    forge.adopt(forge.generate("c1", "face", seeds=[1])[0])
+    edit_box(forge, "c1", widgets=fake_widgets, display=noop)
+    x1 = fake_widgets.created("IntSlider")[2]
+    fake_widgets.created("Button")[0].click()
+    label = fake_widgets.created("Label")[-1]
+    assert label.value.startswith("決めた")
+    x1.value = 500
+    assert label.value == ""
+
+
+def test_show_styles_unreadable_params_names_the_file(forge, fake_widgets, tmp_path):
+    plain = tmp_path / "plain_one.png"
+    Image.new("RGB", (8, 8)).save(plain)
+    with pytest.raises(ConfigError, match="plain_one.png"):
+        show_styles([plain], display=noop, widgets=fake_widgets, thumb=32)
+
+
+def test_show_styles_tolerates_missing_style_and_seed(fake_widgets, tmp_path):
+    from artgen.pnginfo import save_png
+
+    p = tmp_path / "x.png"
+    save_png(Image.new("RGB", (8, 8)), p, {"template": "face"})
+    show_styles([p], display=noop, widgets=fake_widgets, thumb=32)
+    labels = [h.value for h in fake_widgets.created("HTML")]
+    assert any("画風不明" in v for v in labels) and any("シード不明" in v for v in labels)

@@ -95,9 +95,10 @@ def edit_box(forge, char_id: str, *, widgets=None, display=None) -> None:
     with Image.open(face) as im:
         base = im.convert("RGB")
 
+    limits = (base.width, base.height, base.width, base.height)
     sliders = [
-        widgets.IntSlider(value=v, min=0, max=1024, step=8, description=name, continuous_update=False)
-        for name, v in zip(("x0", "y0", "x1", "y1"), box)
+        widgets.IntSlider(value=v, min=0, max=limit, step=8, description=name, continuous_update=False)
+        for name, v, limit in zip(("x0", "y0", "x1", "y1"), box, limits)
     ]
     preview = widgets.Image(value=b"", format="png")
     result = widgets.Label(value="")
@@ -106,6 +107,7 @@ def edit_box(forge, char_id: str, *, widgets=None, display=None) -> None:
         return tuple(int(s.value) for s in sliders)
 
     def redraw(_change=None):
+        result.value = ""  # 前の「決めた」「決められない」を残さない
         try:
             preview.value = _png(overlay_box(base, current()), 512)
         except Exception as e:  # 枠が逆転している間など。描けなくても画面は止めない
@@ -137,8 +139,12 @@ def show_styles(paths, *, display=None, thumb: int = 256, widgets=None) -> None:
     styles: list[str] = []
     seeds: list[int] = []
     for p in paths:
-        params = read_params(Path(p))
-        style, seed = params.get("style"), params.get("seed")
+        try:
+            params = read_params(Path(p))
+        except (MissingParamsError, OSError) as e:
+            raise ConfigError(f"show_styles: {Path(p).name}: 条件を読めない: {e}") from e
+        style = params.get("style") or "（画風不明）"
+        seed = params.get("seed", "（シード不明）")
         if style not in styles:
             styles.append(style)
         if seed not in seeds:

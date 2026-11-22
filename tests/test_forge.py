@@ -514,3 +514,43 @@ def test_face_generation_does_not_inherit(forge):
 def test_compare_styles_same_seeds_per_style(forge):
     paths = forge.compare_styles("c1", styles=["s", "t"], seeds=[5, 6])
     assert [p.name for p in paths] == ["c1_face_s_5.png", "c1_face_s_6.png", "c1_face_t_5.png", "c1_face_t_6.png"]
+
+
+def test_generate_rejects_duplicate_characters_before_gpu(forge, pipe):
+    with pytest.raises(ConfigError, match="重複.*c1"):
+        forge.generate(["c1", "c2", "c1"], "face", seeds=[1])
+    assert pipe.calls == []
+
+
+def test_compare_styles_rejects_duplicate_styles_before_gpu(forge, pipe):
+    with pytest.raises(ConfigError, match="重複.*s"):
+        forge.compare_styles("c1", styles=["s", "t", "s"], seeds=[1])
+    assert pipe.calls == []
+
+
+def test_compare_styles_default_uses_all_style_files(forge):
+    paths = forge.compare_styles("c1", seeds=[5])
+    assert [p.name for p in paths] == ["c1_face_s_5.png", "c1_face_t_5.png"]
+
+
+def test_compare_styles_without_any_style_file(forge, repo, pipe):
+    for p in (repo / "styles").glob("*.yaml"):
+        p.unlink()
+    with pytest.raises(ConfigError, match="画風が 1 つも無い"):
+        forge.compare_styles("c1", seeds=[1])
+    assert pipe.calls == []
+
+
+def test_adopt_missing_path_is_explicit_not_name_search(forge, tmp_path):
+    forge.generate("c1", "face", seeds=[4])
+    with pytest.raises(ConfigError, match="ファイルが無い:.*c1_face_4.png"):
+        forge.adopt(tmp_path / "gone" / "c1_face_4.png")
+
+
+def test_inpaint_with_face_lacking_params_says_to_readopt(forge, pipe):
+    face = forge.selected.face_path("c1")
+    face.parent.mkdir(parents=True)
+    Image.new("RGB", (1024, 1024)).save(face)
+    with pytest.raises(ConfigError, match="採用し直す"):
+        forge.inpaint("c1", "hurt", seeds=[3])
+    assert pipe.calls == []
