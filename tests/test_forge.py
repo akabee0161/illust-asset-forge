@@ -47,10 +47,12 @@ def repo(tmp_path):
     write(tmp_path, "styles/s.yaml", "prompt: [masterpiece]\nnegative: [lowres]\n")
     write(tmp_path, "templates/face.yaml",
           "width: 1024\nheight: 1024\nprompt: [portrait]\nnegative: [full body]\n"
-          "export_size: 256\ninpaint: {strength: 0.6, feather: 24}\n")
+          "export_size: 256\ninpaint: {strength: 0.6, feather: 24, box: [320, 260, 720, 660]}\n")
     write(tmp_path, "templates/fullbody.yaml",
           "width: 832\nheight: 1216\nprompt: [full body]\nnegative: []\nexport_size: null\n")
     write(tmp_path, "characters/c1/character.yaml", CHARACTER.format(box="[100, 100, 400, 300]"))
+    write(tmp_path, "characters/c2/character.yaml", CHARACTER.format(box="[100, 100, 400, 300]"))
+    write(tmp_path, "styles/t.yaml", "prompt: [watercolor]\nnegative: []\n")
     write(tmp_path, "characters/nobox/character.yaml", CHARACTER.format(box="null"))
     return tmp_path
 
@@ -149,11 +151,72 @@ def make_source(tmp_path, size=(1024, 1024), color=(200, 0, 0)):
     return p
 
 
-def test_inpaint_requires_box(forge, pipe, tmp_path):
+def test_inpaint_requires_box_somewhere(repo, pipe, tmp_path):
+    write(repo, "templates/face.yaml",
+          "width: 1024\nheight: 1024\nprompt: [portrait]\nnegative: [full body]\n"
+          "export_size: 256\ninpaint: {strength: 0.6, feather: 24}\n")
+    f = Forge(pipe, repo, tmp_path / "runs", lambda s: s, dict(ENV))
     with pytest.raises(ConfigError) as e:
-        forge.inpaint("nobox", "hurt", make_source(tmp_path), n=1)
-    assert "inpaint_box" in str(e.value)
+        f.inpaint("nobox", "hurt", make_source(tmp_path), n=1)
+    assert "inpaint_box" in str(e.value) and "selection.json" in str(e.value)
     assert pipe.calls == []
+
+
+def test_inpaint_rejects_bad_selection_box_naming_its_file(forge, pipe, tmp_path):
+    forge.selected.save_box("c1", (10, 10, 2000, 500))
+    with pytest.raises(ConfigError) as e:
+        forge.inpaint("c1", "hurt", make_source(tmp_path), n=1)
+    assert "selection.json" in str(e.value) and "inpaint_box" in str(e.value)
+    assert pipe.calls == []
+
+
+def test_inpaint_uses_adopted_face_by_default(forge, pipe):
+    forge.adopt(forge.generate("c1", "face", seeds=[1])[0])
+    p = forge.inpaint("c1", "hurt", seeds=[3])[0]
+    assert read_params(p)["source"] == "face.png"
+
+
+def test_inpaint_without_adopted_face_says_what_to_do(forge, pipe):
+    with pytest.raises(ConfigError, match="顔を採用"):
+        forge.inpaint("c1", "hurt", seeds=[3])
+    assert pipe.calls == []
+
+
+def test_resolve_box_precedence(forge):
+    assert forge.resolve_box("c1") == ((100, 100, 400, 300), "character.yaml")
+    assert forge.resolve_box("nobox") == ((320, 260, 720, 660), "型の既定")
+    forge.selected.save_box("c1", (10, 10, 500, 500))
+    assert forge.resolve_box("c1") == ((10, 10, 500, 500), "selection.json")
+
+
+def test_inpaint_prints_and_records_box_source(forge, capsys):
+    forge.adopt(forge.generate("nobox", "face", seeds=[1])[0])
+    p = forge.inpaint("nobox", "hurt", seeds=[3])[0]
+    assert read_params(p)["inpaint_box"] == [320, 260, 720, 660]
+    assert "型の既定" in capsys.readouterr().out
+
+
+def test_adopt_by_seed_from_latest_run(forge):
+    forge.generate("c1", "face", seeds=[11])
+    assert forge.adopt(11, flip=True) == forge.selected.selected_dir / "c1" / "face.png"
+
+
+def test_adopt_by_path(forge):
+    p = forge.generate("c1", "face", seeds=[4])[0]
+    assert forge.adopt(p) == forge.selected.face_path("c1")
+
+
+def test_pack_zips_selected(forge):
+    forge.adopt(forge.generate("c1", "face", seeds=[1])[0])
+    assert forge.pack().suffix == ".zip"
+    assert forge.pack(["c1"]).exists()
+
+
+def test_expression_inherits_face_style(forge):
+    forge.adopt(forge.generate("c1", "face", seeds=[1], style="t")[0])
+    p = forge.inpaint("c1", "hurt", seeds=[3])[0]
+    assert read_params(p)["style"] == "t"
+    assert read_params(p)["overrides"]["style"] == "t"
 
 
 def test_inpaint_rejects_wrong_source_size(forge, pipe, tmp_path):
@@ -306,32 +369,57 @@ def fake_gpu_libs(monkeypatch):
     return rec
 
 
-def test_load_passes_custom_revision_without_v_prefix(monkeypatch, tmp_path):
+def test_load_pipeline_passes_custom_revision_without_v_prefix(monkeypatch):
     # diffusers は custom_revision を PyPI の版名（"0.42.1"）と比べ、自分で "v" を付ける。
     # "v0.42.1" を渡すと「存在しない」と止まる
     rec = fake_gpu_libs(monkeypatch)
-    from artgen.forge import load
+    from artgen.forge import load_pipeline
 
-    forge = load(tmp_path, tmp_path / "runs")
+    load_pipeline()
     assert rec.kwargs["custom_revision"] == "0.42.1"
     assert rec.kwargs["custom_pipeline"] == "lpw_stable_diffusion_xl"
-    assert forge.env["diffusers"] == "0.42.1" and forge.env["gpu"] == "FakeGPU"
 
 
-def test_load_skips_memory_saving_by_default_for_speed(monkeypatch, tmp_path):
+def test_attach_builds_forge_with_env_and_runs_dir(monkeypatch, tmp_path):
+    fake_gpu_libs(monkeypatch)
+    from artgen.forge import attach
+
+    f = attach(object(), tmp_path, tmp_path / "base")
+    assert f.env["diffusers"] == "0.42.1" and f.env["gpu"] == "FakeGPU"
+    assert f.out_dir == tmp_path / "base" / "runs" and f.out_dir.is_dir()
+    assert f.selected.selected_dir == tmp_path / "base" / "selected"
+
+
+def test_attach_rereads_commit_each_call(monkeypatch, tmp_path):
+    fake_gpu_libs(monkeypatch)
+    import artgen.forge as F
+
+    commits = iter(["aaa1111", "bbb2222"])
+    monkeypatch.setattr(F, "_git_commit", lambda root: next(commits))
+    assert F.attach(object(), tmp_path, tmp_path / "b").env["commit"] == "aaa1111"
+    assert F.attach(object(), tmp_path, tmp_path / "b").env["commit"] == "bbb2222"
+
+
+def test_load_pipeline_skips_memory_saving_by_default_for_speed(monkeypatch):
     rec = fake_gpu_libs(monkeypatch)
-    from artgen.forge import load
+    from artgen.forge import load_pipeline
 
-    load(tmp_path, tmp_path / "runs")
+    load_pipeline()
     assert "attention_slicing" not in rec.calls and "vae_tiling" not in rec.calls
 
 
-def test_load_low_memory_enables_slicing_and_tiling(monkeypatch, tmp_path):
+def test_load_pipeline_low_memory_enables_slicing_and_tiling(monkeypatch):
     rec = fake_gpu_libs(monkeypatch)
-    from artgen.forge import load
+    from artgen.forge import load_pipeline
 
-    load(tmp_path, tmp_path / "runs", low_memory=True)
+    load_pipeline(low_memory=True)
     assert {"attention_slicing", "vae_slicing", "vae_tiling"} <= set(rec.calls)
+
+
+def test_load_is_removed():
+    import artgen.forge as F
+
+    assert not hasattr(F, "load")
 
 
 def test_on_image_called_after_each_saved_image(forge):
@@ -375,3 +463,105 @@ def test_show_one_displays_image_and_seed(forge, monkeypatch, capsys):
     out = capsys.readouterr().out
     assert len(shown) == 1 and max(shown[0].size) == 128
     assert "c1_face_7.png" in out and "seed=7" in out
+
+
+def test_generate_multiple_characters_in_one_run(forge):
+    paths = forge.generate(["c1", "c2"], "face", seeds=[7, 8])
+    assert [p.name for p in paths] == ["c1_face_7.png", "c1_face_8.png", "c2_face_7.png", "c2_face_8.png"]
+    assert len({p.parent for p in paths}) == 1
+
+
+def test_generate_checks_all_characters_before_gpu(forge, pipe):
+    with pytest.raises(ConfigError, match="characters/nope/character.yaml"):
+        forge.generate(["c1", "nope"], "face", seeds=[1])
+    assert pipe.calls == []
+
+
+def test_generate_interrupted_returns_saved_paths(forge, pipe):  # Review Focus 2
+    def stop_on_third(path):
+        if len(pipe.calls) == 3:
+            raise KeyboardInterrupt
+
+    paths = forge.generate(["c1", "c2"], "face", seeds=[7, 8], on_image=stop_on_third)
+    assert [p.name for p in paths] == ["c1_face_7.png", "c1_face_8.png", "c2_face_7.png"]
+
+
+def test_style_argument_overrides_and_is_recorded(forge, pipe):
+    p = forge.generate("c1", "face", seeds=[1], style="t")[0]
+    assert "watercolor" in pipe.calls[0][1]["prompt"]
+    assert read_params(p)["style"] == "t"
+    assert read_params(p)["overrides"]["style"] == "t"
+
+
+def test_same_style_as_config_is_not_recorded(forge):
+    p = forge.generate("c1", "face", seeds=[1], style="s")[0]
+    assert "style" not in read_params(p)["overrides"]
+
+
+def test_fullbody_inherits_adopted_face_style(forge, pipe, capsys):
+    face = forge.generate("c1", "face", seeds=[1], style="t")[0]
+    forge.selected.adopt(face)
+    p = forge.generate("c1", "fullbody", seeds=[2])[0]
+    assert read_params(p)["style"] == "t"
+    assert "採用した顔" in capsys.readouterr().out
+
+
+def test_face_generation_does_not_inherit(forge):
+    forge.selected.adopt(forge.generate("c1", "face", seeds=[1], style="t")[0])
+    assert read_params(forge.generate("c1", "face", seeds=[2])[0])["style"] == "s"
+
+
+def test_compare_styles_same_seeds_per_style(forge):
+    paths = forge.compare_styles("c1", styles=["s", "t"], seeds=[5, 6])
+    assert [p.name for p in paths] == ["c1_face_s_5.png", "c1_face_s_6.png", "c1_face_t_5.png", "c1_face_t_6.png"]
+
+
+def test_generate_rejects_duplicate_characters_before_gpu(forge, pipe):
+    with pytest.raises(ConfigError, match="重複.*c1"):
+        forge.generate(["c1", "c2", "c1"], "face", seeds=[1])
+    assert pipe.calls == []
+
+
+def test_compare_styles_rejects_duplicate_styles_before_gpu(forge, pipe):
+    with pytest.raises(ConfigError, match="重複.*s"):
+        forge.compare_styles("c1", styles=["s", "t", "s"], seeds=[1])
+    assert pipe.calls == []
+
+
+def test_compare_styles_default_uses_all_style_files(forge):
+    paths = forge.compare_styles("c1", seeds=[5])
+    assert [p.name for p in paths] == ["c1_face_s_5.png", "c1_face_t_5.png"]
+
+
+def test_compare_styles_without_any_style_file(forge, repo, pipe):
+    for p in (repo / "styles").glob("*.yaml"):
+        p.unlink()
+    with pytest.raises(ConfigError, match="画風が 1 つも無い"):
+        forge.compare_styles("c1", seeds=[1])
+    assert pipe.calls == []
+
+
+def test_adopt_missing_path_is_explicit_not_name_search(forge, tmp_path):
+    forge.generate("c1", "face", seeds=[4])
+    with pytest.raises(ConfigError, match="ファイルが無い:.*c1_face_4.png"):
+        forge.adopt(tmp_path / "gone" / "c1_face_4.png")
+
+
+def test_inpaint_with_face_lacking_params_says_to_readopt(forge, pipe):
+    face = forge.selected.face_path("c1")
+    face.parent.mkdir(parents=True)
+    Image.new("RGB", (1024, 1024)).save(face)
+    with pytest.raises(ConfigError, match="採用し直す"):
+        forge.inpaint("c1", "hurt", seeds=[3])
+    assert pipe.calls == []
+
+
+def test_inpaint_records_source_hash_and_adopt_blocks_after_readopt(forge):
+    import hashlib
+
+    face = forge.adopt(forge.generate("c1", "face", seeds=[1])[0])
+    expr = forge.inpaint("c1", "hurt", seeds=[3])[0]
+    assert read_params(expr)["source_sha256"] == hashlib.sha256(face.read_bytes()).hexdigest()
+    forge.adopt(forge.generate("c1", "face", seeds=[2])[0])  # 顔を採用し直す
+    with pytest.raises(ConfigError, match="今の顔から作っていない"):
+        forge.adopt(expr)

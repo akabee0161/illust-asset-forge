@@ -25,62 +25,76 @@ GPU を使う処理は依頼者が Colab で動かし、GPU を使わない処�
 
 | ファイル | 内容 |
 |---|---|
-| `styles/<name>.yaml` | 画風（プロンプトとネガティブ） |
-| `templates/face.yaml`・`fullbody.yaml` | 絵の種類（大きさ・構図のタグ・書き出しの大きさ） |
-| `characters/<id>/character.yaml` | キャラクターの設定（外見・表情の一覧・描き直す範囲 `inpaint_box`） |
+| `styles/<name>.yaml` | 画風（プロンプトとネガティブ）。複数あり、`compare_styles` で見比べる |
+| `templates/face.yaml`・`fullbody.yaml` | 絵の種類（大きさ・構図のタグ・書き出しの大きさ・inpaint の既定の範囲） |
+| `characters/<id>/character.yaml` | キャラクターの設定（外見・表情の一覧・描き直す範囲 `inpaint_box`・画風 `style`） |
 | `characters/<id>/source/` | 採用した元の画像（受け取ったもの） |
 | `characters/<id>/face.png` など・`params.json` | 書き出した受け渡しの形 |
-| `src/artgen/` | `config`（読み込み）・`prompt`（組み立て）・`pnginfo`（条件の読み書き）・`mask`（描き直す範囲）・`export`（書き出し）・`forge`（Colab 側） |
+| `src/artgen/` | `config`（読み込み）・`prompt`（組み立て）・`pnginfo`（条件の読み書き）・`mask`（描き直す範囲）・`selection`（採用した絵の置き場・run の候補探し）・`picker`（ノートブックのボタンの画面）・`intake`（zip の取り込み）・`export`（書き出し）・`forge`（Colab 側） |
 | `notebooks/run.ipynb` | Colab の入口 |
 | `requirements-colab.txt` | Colab で入れるライブラリ（版を固定） |
+
+Drive の `illust-asset-forge/` の下の置き場:
+
+| 置き場 | 内容 |
+|---|---|
+| `runs/<run_id>/` | 生成した候補（`<id>_<型>[_<表情>]_<seed>.png`）。画風の見比べは `<id>_<型>_<画風>_<seed>.png` |
+| `selected/<id>/` | 採用した絵（`face.png`・`face_<表情>.png`・`fullbody.png`）と、表情の範囲 `selection.json`。顔を採り直すと、古い表情と範囲は `replaced/<日時>/` へ退く |
+| `packs/` | まとめの zip（`selected_<日時>.zip`） |
 
 ## 2. Colab での使い方
 
 1. `notebooks/run.ipynb` を Colab で開き、ランタイムを GPU（T4）にする
-2. 上から順にセルを実行する
-   - **準備**: Drive をつなぎ、リポジトリを clone（2 回目以降は pull）し、ライブラリを入れる。Claude が設定を直して push した後は、このセルだけ実行し直せば取り込める
-   - **モデルの読み込み**: `forge` が無いときだけ読み込む（数分）。速さのためメモリ節約の設定は入れていない。メモリ不足で止まったときだけ `F.load(".", low_memory=True)` にする（遅くなる）
-   - **顔**: `forge.generate("ally05", "face", n=8, on_image=F.show_one)` で、1 枚できるたびに表示される。調整中は `n=2` など少なくし、気に入らなければ ■ で止めて作り直す（止めても、できた分は Drive に残る）。一気に作るときは `n=16` などにして、後で Drive から見る
-   - **表情**: `forge.inpaint("ally05", "hurt", source=<採用した顔>, n=4)`。`inpaint_box` が要るので、顔を採用して Claude が書いた後に実行する
-   - **全身**: `forge.generate("ally05", "fullbody", n=4)`
-3. 候補は Drive の `illust-asset-forge/runs/<run_id>/` に `<id>_<型>[_<表情>]_<seed>.png` で保存される
+2. 各セルは先頭の変数（キャラクターの ID・枚数・表情名・画風名）だけ書き換えて、上から順に実行する
+   - **準備**: Drive をつなぎ、リポジトリを clone（2 回目以降は pull）し、ライブラリを入れる。Claude が設定を直して push した後は、このセルだけ実行し直せば取り込める（モデルは読み込み直さない）
+   - **モデルの読み込み**: `pipe` が無いときだけ `F.load_pipeline()` で読み込む（数分）。メモリ不足で止まったときだけ `F.load_pipeline(low_memory=True)` にする（遅くなる）。続けて `forge = F.attach(pipe, ".")` で、読み込み済みのパイプラインに設定を結びつける
+   - **画風の見比べ（任意）**: `forge.compare_styles(CHAR, n=2)` が、同じシードで画風だけを変えた顔を作り、`P.show_styles(paths)` で画風ごとに並べる。気に入った画風名を後ろの `STYLE` に書く
+   - **顔**: `forge.generate(CHARS, "face", n=4, style=STYLE, on_image=F.show_one)`。`CHARS` に並べたキャラクターをまとめて作り、1 枚できるたびに表示される。調整中は `n=2` など少なくし、気に入らなければ ■ で止めて作り直す（止めても、できた分は Drive に残る）。一気に作るときは `n=16` などにして、後から `P.pick(forge, run_id=None)`（中断・切断の後も同じ）で候補を開き直す。`P.pick(forge, paths)` の画面で、採用する顔のボタンを押す
+   - **表情の範囲**: `P.edit_box(forge, CHAR)` が、採用した顔に目と口の赤枠を重ね、スライダーで動かして `selection.json` に保存する。キャラクターごとに表情を作る前に 1 回
+   - **表情**: `forge.inpaint(CHAR, "hurt", n=4, on_image=F.show_one)` のあと `P.pick(forge, paths)`。採用した顔と決めた範囲を使うので、パスは書かない
+   - **全身**: `forge.generate(CHARS, "fullbody", n=4, on_image=F.show_one)` のあと `P.pick(forge, paths)`
+   - **まとめ**: `forge.pack()` が採用した絵を zip にして `packs/` に置く。続くセルでダウンロードする
+3. 候補は Drive の `illust-asset-forge/runs/<run_id>/` に保存される
+
+型 face は、**左向き**の頭から胸までの構図で作る。顔は常に左向きにそろえる。候補が右向きに出たときは、顔の候補の画面で「左右反転して採用」を押して左向きにする（反転は顔の元絵だけで、表情・全身には出ない）。画風は、`style="<画風名>"`（または `STYLE`）で、設定の `style` を一時的に差し替えられる。
 
 試すときの引数（YAML は書き換えない）:
 
 ```python
-forge.generate("ally05", "face", extra="scar on cheek", remove="stubble")  # タグを足す・消す
-forge.generate("ally05", "face", extra="(stubble:1.3)")  # 設定と同じタグを重み付きで書くと置き換わる（remove は設定のタグにだけ効く）
-forge.generate("ally05", "face", extra_negative="hat", remove_negative="lowres")
-forge.generate("ally05", "face", seeds=[123, 456])  # シードを固定（n は無視される）
-forge.generate("ally05", "face", guidance=6, steps=30)  # inpaint は strength も
+forge.generate(CHARS, "face", extra="scar on cheek", remove="stubble")  # タグを足す・消す
+forge.generate(CHARS, "face", extra="(stubble:1.3)")  # 設定と同じタグを重み付きで書くと置き換わる（remove は設定のタグにだけ効く）
+forge.generate(CHARS, "face", extra_negative="hat", remove_negative="lowres")
+forge.generate(CHARS, "face", seeds=[123, 456])  # シードを固定（n は無視される）
+forge.generate(CHARS, "face", style="watercolor")  # 画風を差し替える
+forge.generate(CHARS, "face", guidance=6, steps=30)  # inpaint は strength も
+forge.adopt("<ファイル名>", flip=True)  # 画面を使わずに採用する（ファイル名は全 run から新しい順に探す。flip=True で左右反転）
 ```
 
 YAML のタグにカンマを含む重み付きタグを書くときは、引用符で囲む（`"(a, b:1.1)"`）。囲まないと YAML が黙って割るので、カッコの対応が取れないタグは `ConfigError` で止まる。
 
-**YAML は Colab で書き換えない。** Colab はリポジトリを GitHub から取るので、書き換えは GitHub に戻らず、次の pull でぶつかる。上書きした内容は PNG の条件に `overrides` として残るので、採用した絵を受け取った Claude が設定に戻す。
+**YAML は Colab で書き換えない。** Colab はリポジトリを GitHub から取るので、書き換えは GitHub に戻らず、次の pull でぶつかる。上書きした内容（画風の差し替えも含む）は PNG の条件に `overrides` として残るので、採用した絵を受け取った Claude が設定に戻す。表情の範囲も、`selection.json` で Claude に届く。
 
 ## 3. 採用した絵の渡し方
 
-Drive から採用した PNG を手元にダウンロードし、zip にしてチャットに添付する。zip にするのは、PNG の条件（シードなど）が添付で消えたり、画像が縮められたりするのを避けるため。
+まとめのセルで `forge.pack()` が zip を作る。セルが自動でダウンロードするので、それをチャットに添付する。ダウンロードできなかったときは、Drive の `packs/` から取る。zip にするのは、PNG の条件（シードなど）が添付で消えたり、画像が縮められたりするのを避けるため。
 
 ## 4. Claude 側の流れ
 
-1. 受け取った PNG を `characters/<id>/source/` に `face.png`・`face_<表情>.png`・`fullbody.png` の名前で置く
-2. `python -m artgen.pnginfo characters/<id>/source/*.png` で条件が残っているか確かめる（`overrides` は先頭に出る）
-3. `overrides` を `character.yaml` などの設定に戻す
-4. 採用した顔を見て、目と口を囲む `inpaint_box`（1024 の座標）を `character.yaml` に書く
-5. `python -m artgen.export <id>` で書き出す（顔は 256×256 に縮め、`params.json` を作る）
-6. push は依頼者が頼んだときだけ行う
+1. `python -m artgen.intake <zip>` で、zip の中身を `characters/<id>/source/` に取り込む。`source/` は丸ごと置き換わり、検査に通らなければ何も書かれない。出力に、取り込んだ・消したファイルと、書き戻すもの（PNG の条件の `overrides`・`selection.json` の範囲 `inpaint_box`）の一覧が出る
+2. 出力の一覧を `character.yaml` などの設定に戻す（`overrides` の `style` は `character.yaml` の `style` へ。範囲は `inpaint_box` へ）
+3. 必要なら `python -m artgen.pnginfo characters/<id>/source/*.png` で PNG の条件を確かめる
+4. `python -m artgen.export <id>` で書き出す（顔は 256×256 に縮め、`params.json` を作る）
+5. push は依頼者が頼んだときだけ行う
 
 ## 5. 初めて Colab で動かすときの確認
 
 GPU を使う部分は Claude が動かして確かめられない。次を 1 回ずつ実行して確かめる。
 
-1. **準備のセル**: エラーなく終わり、最後に `forge` ができる（ライブラリの版の組み合わせ・コミュニティパイプラインの取得もここで確かめられる）
-2. **顔のセル**: 8 枚が表示され、各ファイル名とシードが出る。Drive の `runs/` に PNG ができる。`python -m artgen.pnginfo` か Colab 上で PNG の条件を読めること
-3. **表情のセル**: 顔を採用し、Claude が `inpaint_box` を書いて push した後に実行する。目と口のあたりだけが変わり、境目が目立たない
-4. **全身のセル**: 832×1216 の全身絵が出る
-5. 添付した PNG に条件が残っているか（Claude が `pnginfo` で確かめる）
+1. **準備・モデルのセル**: エラーなく終わり、`pipe` と `forge` ができる
+2. **画風の見比べ・顔のセル**: 画像が 1 枚ずつ表示され、Drive の `runs/` に PNG ができる。顔の画面のボタンで採用でき、`selected/<id>/face.png` ができる。左向きの構図になっているか、画風の候補が見比べに足りるか
+3. **範囲・表情のセル**: 赤枠を目と口に合わせられ、表情は目と口のあたりだけが変わり、境目が目立たない。`templates/face.yaml` の `inpaint.box` の初期値が合っているか
+4. **全身のセル**: 832×1216 の全身絵が出て、ボタンで採用できる
+5. **まとめのセル**: zip ができてダウンロードされる。Claude が `python -m artgen.intake` で取り込め、PNG の条件が残っている
 
 ## 6. ライセンスと再現の限界
 
@@ -93,4 +107,4 @@ GPU を使う部分は Claude が動かして確かめられない。次を 1 �
 uv venv .venv && uv pip install -e '.[dev]' && .venv/bin/pytest
 ```
 
-`src/artgen/forge.py` の `load()` と `show()` 以外は torch・diffusers が無くても動く。
+`src/artgen/forge.py` の `load_pipeline()`・`attach()`・`show_one()`・`show()` だけが torch・diffusers を使う。`picker` のボタンの画面は ipywidgets（Colab には入っている）が要るが、torch は要らない。それ以外は、どちらが無くても動く。

@@ -1,6 +1,6 @@
 """Colab 側の入口。パイプラインを外から受け取る作りで、GPU なしでもテストできる。
 
-torch・diffusers・IPython は `load()` と `show()` の中でだけ import する。
+torch・diffusers・IPython は `load_pipeline()`・`attach()`・`show()` の中でだけ import する。
 """
 
 from __future__ import annotations
@@ -18,10 +18,11 @@ from artgen.config import ConfigError, load_character, load_style, load_template
 from artgen.mask import check_box, check_feather, feather_composite, make_mask
 from artgen.pnginfo import MissingParamsError, read_params, save_png
 from artgen.prompt import Overrides, build_prompt
+from artgen.selection import SelectionStore, file_sha256, find_candidate
 
 MODEL_NAME = "cagliostrolab/animagine-xl-4.0"
 SAMPLER_NAME = "Euler a"
-DEFAULT_OUT_DIR = "/content/drive/MyDrive/illust-asset-forge/runs"
+DEFAULT_BASE_DIR = "/content/drive/MyDrive/illust-asset-forge"
 MAX_SEED = 2**32 - 1
 
 
@@ -35,6 +36,8 @@ class Forge:
         env: dict[str, str],
         *,
         cleanup: Callable[[], None] = lambda: None,
+        selected_dir: Path | None = None,
+        packs_dir: Path | None = None,
     ):
         self.pipe = pipe
         self.root = Path(root)
@@ -42,6 +45,10 @@ class Forge:
         self.make_generator = make_generator
         self.env = env
         self.cleanup = cleanup
+        self.selected = SelectionStore(
+            Path(selected_dir) if selected_dir is not None else self.out_dir.parent / "selected",
+            Path(packs_dir) if packs_dir is not None else self.out_dir.parent / "packs",
+        )
 
     # --- 共通 ---------------------------------------------------------
 
@@ -97,15 +104,17 @@ class Forge:
             **self.env,
         }
 
-    def _run(self, seed_list, run_dir: Path, build, on_image) -> list[Path]:
-        """シードごとに生成して保存する。1 枚保存するたびに on_image を呼ぶ。
+    def _run(self, jobs, run_dir: Path, build, on_image) -> list[Path]:
+        """ジョブ（シード、または (キャラクター, シード) など）ごとに生成して保存する。
+        1 枚保存するたびに on_image を呼ぶ。
 
         ■ で止められたら、保存済みの分を返す（Drive にも残っている）。
+        on_image が KeyboardInterrupt を投げた場合も、その 1 枚は保存済みとして含める。
         """
         paths: list[Path] = []
         try:
-            for seed in seed_list:
-                image, params, path = build(seed)
+            for job in jobs:
+                image, params, path = build(job)
                 save_png(image, path, params)
                 paths.append(path)
                 self._finish_one()
@@ -121,9 +130,74 @@ class Forge:
 
     # --- 生成 ---------------------------------------------------------
 
+    def resolve_style(self, char_id: str, style: str | None, inherit: bool) -> tuple[str, str]:
+        """使う画風と、その出どころ（"引数" | "採用した顔" | "設定"）を返す。"""
+        if style is not None:
+            return style, "引数"
+        if inherit:
+            try:
+                adopted = self.selected.face_style(char_id)
+            except MissingParamsError as e:
+                raise ConfigError(
+                    f"{char_id}: 採用した顔 {self.selected.face_path(char_id).name} に生成の条件が無く、画風が分からない"
+                    f"（{e}）。顔を候補からもう一度採用し直す"
+                ) from e
+            if adopted is not None:
+                print(f"{char_id}: 画風 {adopted}（採用した顔に合わせた）")
+                return adopted, "採用した顔"
+        return load_character(self.root, char_id).style, "設定"
+
+    def _text2img_batch(
+        self, entries, template, seed_list, overrides, guidance, steps, file_name, on_image,
+    ) -> list[Path]:
+        """entries（(キャラクター, 画風名) の一覧）を順に、それぞれ seed_list の全シードで生成する。
+
+        GPU を回す前に、全 entries の設定・画風・プロンプトを組み立てて検証する。
+        """
+        tpl = load_template(self.root, template)
+        guidance_used = tpl.guidance if guidance is None else guidance
+        steps_used = tpl.steps if steps is None else steps
+        self._check_sampling(guidance_used, steps_used)
+        plans = {}
+        for char_id, style_name in entries:
+            character = load_character(self.root, char_id)
+            style = load_style(self.root, style_name)
+            prompt = build_prompt(style, tpl, character, overrides=overrides)
+            recorded = self._recorded_overrides(
+                overrides, guidance=guidance, steps=steps,
+                style=style_name if style_name != character.style else None,
+            )
+            plans[(char_id, style_name)] = (character, style, prompt, recorded)
+
+        run_id = datetime.now().strftime("%Y%m%d_%H%M%S")
+        run_dir = self.out_dir / run_id
+
+        def build(job):
+            entry, seed = job
+            character, style, prompt, recorded = plans[entry]
+            image = self.pipe.text2img(
+                prompt=prompt.positive,
+                negative_prompt=prompt.negative,
+                width=tpl.width,
+                height=tpl.height,
+                guidance_scale=guidance_used,
+                num_inference_steps=steps_used,
+                generator=self.make_generator(seed),
+                output_type="pil",
+            ).images[0]
+            params = self._base_params(
+                prompt=prompt, template=tpl, style=style, character=character,
+                expression=character.default_expression, overrides=recorded, seed=seed,
+                guidance=guidance_used, steps=steps_used, run_id=run_id,
+            )
+            return image, params, run_dir / file_name(*entry, seed)
+
+        jobs = [(entry, seed) for entry in entries for seed in seed_list]
+        return self._run(jobs, run_dir, build, on_image)
+
     def generate(
         self,
-        char_id: str,
+        char_ids: str | list[str],
         template: str,
         n: int = 4,
         seeds: list[int] | None = None,
@@ -133,49 +207,86 @@ class Forge:
         remove_negative: str = "",
         guidance: float | None = None,
         steps: int | None = None,
+        style: str | None = None,
         on_image: Callable[[Path], None] | None = None,
     ) -> list[Path]:
-        character = load_character(self.root, char_id)
-        style = load_style(self.root, character.style)
-        tpl = load_template(self.root, template)
+        if isinstance(char_ids, str):
+            char_ids = [char_ids]
+        char_ids = list(char_ids)
+        if not char_ids:
+            raise ConfigError("char_ids: 空の一覧")
+        _check_unique(char_ids, "char_ids")
         overrides = Overrides.from_args(extra, remove, extra_negative, remove_negative)
-        prompt = build_prompt(style, tpl, character, overrides=overrides)
-        recorded = self._recorded_overrides(overrides, guidance=guidance, steps=steps)
-        guidance = tpl.guidance if guidance is None else guidance
-        steps = tpl.steps if steps is None else steps
-        self._check_sampling(guidance, steps)
+        entries = [
+            (c, self.resolve_style(c, style, template != "face")[0]) for c in char_ids
+        ]
         seed_list = self._seeds(n, seeds)
+        return self._text2img_batch(
+            entries, template, seed_list, overrides, guidance, steps,
+            lambda c, _style, seed: f"{c}_{template}_{seed}.png", on_image,
+        )
 
-        run_id = datetime.now().strftime("%Y%m%d_%H%M%S")
-        run_dir = self.out_dir / run_id
-
-        def build(seed: int):
-            image = self.pipe.text2img(
-                prompt=prompt.positive,
-                negative_prompt=prompt.negative,
-                width=tpl.width,
-                height=tpl.height,
-                guidance_scale=guidance,
-                num_inference_steps=steps,
-                generator=self.make_generator(seed),
-                output_type="pil",
-            ).images[0]
-            params = self._base_params(
-                prompt=prompt, template=tpl, style=style, character=character,
-                expression=character.default_expression, overrides=recorded, seed=seed,
-                guidance=guidance, steps=steps, run_id=run_id,
-            )
-            return image, params, run_dir / f"{char_id}_{template}_{seed}.png"
-
-        return self._run(seed_list, run_dir, build, on_image)
+    def compare_styles(
+        self,
+        char_id: str,
+        template: str = "face",
+        styles: list[str] | None = None,
+        seeds: list[int] | None = None,
+        n: int = 2,
+        on_image: Callable[[Path], None] | None = None,
+    ) -> list[Path]:
+        """同じシードで画風だけを変えて並べる。styles が None なら styles/ の全部（名前順）。"""
+        if styles is None:
+            styles = sorted(p.stem for p in (self.root / "styles").glob("*.yaml"))
+        styles = list(styles)
+        if not styles:
+            raise ConfigError("styles: 画風が 1 つも無い")
+        _check_unique(styles, "styles")
+        seed_list = self._seeds(n, seeds)
+        return self._text2img_batch(
+            [(char_id, s) for s in styles], template, seed_list,
+            Overrides.from_args("", "", "", ""), None, None,
+            lambda c, s, seed: f"{c}_{template}_{s}_{seed}.png", on_image,
+        )
 
     # --- 表情（inpaint） -----------------------------------------------
+
+    def resolve_box(self, char_id: str) -> tuple[tuple[int, int, int, int], str]:
+        """inpaint の範囲と出どころ（"selection.json" | "character.yaml" | "型の既定"）を返す。"""
+        box = self.selected.read_box(char_id)
+        if box is not None:
+            return box, "selection.json"
+        character = load_character(self.root, char_id)
+        if character.inpaint_box is not None:
+            return character.inpaint_box, "character.yaml"
+        tpl = load_template(self.root, "face")
+        if tpl.inpaint_box is not None:
+            return tpl.inpaint_box, "型の既定"
+        raise ConfigError(
+            f"{char_id}: inpaint_box: 範囲がどこにも無い。範囲のセルで決めて selection.json に保存するか、"
+            f"characters/{char_id}/character.yaml の inpaint_box か templates/face.yaml の inpaint.box に書く"
+        )
+
+    def adopt(
+        self, candidate: str | int | Path, flip: bool = False, run_id: str | None = None,
+    ) -> Path:
+        """候補を採用する。Path で存在すればそれを、そうでなければ、ファイル名は全部の run から（新しい順）、シードは最新の run（run_id 指定可）から探す。"""
+        if isinstance(candidate, Path):
+            if not candidate.is_file():
+                raise ConfigError(f"ファイルが無い: {candidate}")
+            path = candidate
+        else:
+            path = find_candidate(self.out_dir, candidate, run_id)
+        return self.selected.adopt(path, flip=flip)
+
+    def pack(self, char_ids: list[str] | None = None) -> Path:
+        return self.selected.pack(char_ids)
 
     def inpaint(
         self,
         char_id: str,
         expression: str,
-        source: str | Path,
+        source: str | Path | None = None,
         n: int = 4,
         seeds: list[int] | None = None,
         extra: str = "",
@@ -185,25 +296,30 @@ class Forge:
         strength: float | None = None,
         guidance: float | None = None,
         steps: int | None = None,
+        style: str | None = None,
         on_image: Callable[[Path], None] | None = None,
     ) -> list[Path]:
         character = load_character(self.root, char_id)
-        style = load_style(self.root, character.style)
+        style_name, _ = self.resolve_style(char_id, style, inherit=True)
+        style_obj = load_style(self.root, style_name)
         tpl = load_template(self.root, "face")
         overrides = Overrides.from_args(extra, remove, extra_negative, remove_negative)
-        prompt = build_prompt(style, tpl, character, expression=expression, overrides=overrides)
+        prompt = build_prompt(style_obj, tpl, character, expression=expression, overrides=overrides)
 
         # GPU を回す前に、入力の誤りをすべて止める
-        if character.inpaint_box is None:
-            raise ConfigError(
-                f"characters/{char_id}/character.yaml: inpaint_box: 未記入。"
-                "採用した顔を Claude に渡し、inpaint_box を書いてもらう"
-            )
+        box, box_from = self.resolve_box(char_id)
         if tpl.inpaint_strength is None or tpl.inpaint_feather is None:
             raise ConfigError("templates/face.yaml: inpaint: strength と feather が無い")
+        if source is None:
+            source = self.selected.face_path(char_id)
+            if not source.is_file():
+                raise ConfigError(
+                    f"source: {char_id} の顔を採用していない。顔のセルで採用するか、source= にパスを渡す"
+                )
         source = Path(source)
         if not source.is_file():
             raise ConfigError(f"source: ファイルが無い: {source}")
+        source_sha256 = file_sha256(source)
         with Image.open(source) as im:
             original = im.convert("RGB")
         if original.size != (tpl.width, tpl.height):
@@ -211,15 +327,23 @@ class Forge:
                 f"source: 画像の大きさが型 face と違う: {original.size[0]}x{original.size[1]}"
                 f"（必要: {tpl.width}x{tpl.height}）"
             )
-        box = character.inpaint_box
+        box_file = {
+            "selection.json": f"selected/{char_id}/selection.json",
+            "character.yaml": f"characters/{char_id}/character.yaml",
+            "型の既定": "templates/face.yaml",
+        }[box_from]
         try:
             check_box(box, original.size)
             check_feather(box, tpl.inpaint_feather)
         except ConfigError as e:
-            raise ConfigError(f"characters/{char_id}/character.yaml: {e}") from e
+            raise ConfigError(f"{box_file}: {e}") from e
+        print(f"{char_id}: inpaint の範囲 {tuple(box)}（{box_from}）")
         mask = make_mask(original.size, box)
 
-        recorded = self._recorded_overrides(overrides, strength=strength, guidance=guidance, steps=steps)
+        recorded = self._recorded_overrides(
+            overrides, strength=strength, guidance=guidance, steps=steps,
+            style=style_name if style_name != character.style else None,
+        )
         strength = tpl.inpaint_strength if strength is None else strength
         guidance = tpl.guidance if guidance is None else guidance
         steps = tpl.steps if steps is None else steps
@@ -245,12 +369,13 @@ class Forge:
             ).images[0]
             result = feather_composite(original, generated, box, tpl.inpaint_feather)
             params = self._base_params(
-                prompt=prompt, template=tpl, style=style, character=character,
+                prompt=prompt, template=tpl, style=style_obj, character=character,
                 expression=expression, overrides=recorded, seed=seed,
                 guidance=guidance, steps=steps, run_id=run_id,
             )
             params.update(
                 source=source.name,
+                source_sha256=source_sha256,
                 inpaint_box=list(box),
                 strength=strength,
                 feather=tpl.inpaint_feather,
@@ -258,6 +383,14 @@ class Forge:
             return result, params, run_dir / f"{char_id}_face_{expression}_{seed}.png"
 
         return self._run(seed_list, run_dir, build, on_image)
+
+
+def _check_unique(values: list[str], label: str) -> None:
+    seen: set[str] = set()
+    for v in values:
+        if v in seen:
+            raise ConfigError(f"{label}: 同じものが重複している: {v}")
+        seen.add(v)
 
 
 def _git_commit(root: Path) -> str:
@@ -271,7 +404,7 @@ def _git_commit(root: Path) -> str:
         return "unknown"
 
 
-def load(root: str | Path = ".", out_dir: str | Path = DEFAULT_OUT_DIR, low_memory: bool = False) -> Forge:
+def load_pipeline(low_memory: bool = False) -> Any:
     """Colab でモデルを読み込む。GPU が要る（サーバーでは動かさない）。
 
     low_memory=True にすると、メモリ節約の設定（attention slicing・VAE の分割）を入れる。
@@ -279,7 +412,6 @@ def load(root: str | Path = ".", out_dir: str | Path = DEFAULT_OUT_DIR, low_memo
     """
     import diffusers
     import torch
-    import transformers
     from diffusers import EulerAncestralDiscreteScheduler, StableDiffusionXLPipeline
 
     pipe = StableDiffusionXLPipeline.from_pretrained(
@@ -300,9 +432,18 @@ def load(root: str | Path = ".", out_dir: str | Path = DEFAULT_OUT_DIR, low_memo
         pipe.vae.enable_tiling()
     torch.backends.cudnn.deterministic = True
     torch.backends.cudnn.benchmark = False
+    return pipe
+
+
+def attach(pipe: Any, root: str | Path = ".", base_dir: str | Path = DEFAULT_BASE_DIR) -> Forge:
+    """読み込み済みのパイプラインに Forge をつなぐ。版と commit は呼ぶたびに読み直す
+    （pull した後の commit を記録するため）。"""
+    import diffusers
+    import torch
+    import transformers
 
     root = Path(root).resolve()
-    out_dir = Path(out_dir)
+    out_dir = Path(base_dir) / "runs"
     out_dir.mkdir(parents=True, exist_ok=True)
     env = {
         "commit": _git_commit(root),

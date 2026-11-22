@@ -33,6 +33,7 @@ class Template:
     use_items: bool
     inpaint_strength: float | None
     inpaint_feather: int | None
+    inpaint_box: tuple[int, int, int, int] | None
 
 
 @dataclass(frozen=True)
@@ -56,6 +57,18 @@ _MISSING = object()
 def has_unbalanced_parens(tag: str) -> bool:
     """() と [] の対応が取れていないタグか。"""
     return tag.count("(") != tag.count(")") or tag.count("[") != tag.count("]")
+
+
+def parse_box(rel: str, where: str, value: Any) -> tuple[int, int, int, int]:
+    """[x0, y0, x1, y1] を検査して返す（0 以上の整数で x0<x1・y0<y1）。"""
+    if not isinstance(value, list) or len(value) != 4:
+        raise ConfigError(f"{rel}: {where}: [x0, y0, x1, y1] の 4 つの整数でない")
+    if any(isinstance(v, bool) or not isinstance(v, int) for v in value):
+        raise ConfigError(f"{rel}: {where}: 整数でない")
+    x0, y0, x1, y1 = value
+    if x0 < 0 or y0 < 0 or x0 >= x1 or y0 >= y1:
+        raise ConfigError(f"{rel}: {where}: x0<x1・y0<y1 で 0 以上の四角でない: {value}")
+    return (x0, y0, x1, y1)
 
 
 class _Reader:
@@ -120,6 +133,9 @@ class _Reader:
             raise self.fail(where, "数値でない")
         return value
 
+    def box(self, where: str, value: Any) -> tuple[int, int, int, int]:
+        return parse_box(self.rel, where, value)
+
 
 def load_style(root: Path, name: str) -> Style:
     r = _Reader(root, f"styles/{name}.yaml")
@@ -137,7 +153,7 @@ def load_template(root: Path, name: str) -> Template:
     if not isinstance(use_items, bool):
         raise r.fail("use_items", "true か false でない")
 
-    strength = feather = None
+    strength = feather = inpaint_box = None
     inpaint = r._get("inpaint", None)
     if inpaint is not None:
         if not isinstance(inpaint, dict):
@@ -152,6 +168,8 @@ def load_template(root: Path, name: str) -> Template:
         feather = r.as_int("inpaint.feather", inpaint["feather"], positive=False)
         if feather < 0:
             raise r.fail("inpaint.feather", "0 以上の整数でない")
+        if inpaint.get("box") is not None:
+            inpaint_box = r.box("inpaint.box", inpaint["box"])
 
     guidance = r.number("guidance", r._get("guidance", 5))
     return Template(
@@ -166,6 +184,7 @@ def load_template(root: Path, name: str) -> Template:
         use_items=use_items,
         inpaint_strength=strength,
         inpaint_feather=feather,
+        inpaint_box=inpaint_box,
     )
 
 
@@ -186,12 +205,7 @@ def load_character(root: Path, char_id: str) -> Character:
 
     box = r._get("inpaint_box", None)
     if box is not None:
-        if not isinstance(box, list) or len(box) != 4:
-            raise r.fail("inpaint_box", "[x0, y0, x1, y1] の 4 つの整数でない")
-        x0, y0, x1, y1 = (r.as_int("inpaint_box", v, positive=False) for v in box)
-        if x0 < 0 or y0 < 0 or x0 >= x1 or y0 >= y1:
-            raise r.fail("inpaint_box", f"x0<x1・y0<y1 で 0 以上の四角でない: {box}")
-        box = (x0, y0, x1, y1)
+        box = r.box("inpaint_box", box)
 
     return Character(
         id=char_id,
