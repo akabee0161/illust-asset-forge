@@ -147,3 +147,138 @@ def test_main_end_to_end(repo, pack_zip, capsys):
     assert main([str(pack_zip), "--root", str(repo)]) == 0
     out = capsys.readouterr().out
     assert "c1" in out and "書き戻す" in out
+
+
+def _fail_staging_rename(monkeypatch, char_id):
+    from pathlib import Path
+
+    real = Path.rename
+
+    def rename(self, target):
+        if self.name == ".source.new" and self.parent.name == char_id:
+            raise OSError("rename failed")
+        return real(self, target)
+
+    monkeypatch.setattr(Path, "rename", rename)
+
+
+def test_install_rollback_keeps_source_when_swap_fails(repo, selected, monkeypatch):
+    before = {p.name: p.read_bytes() for p in (repo / "characters/c1/source").iterdir()}
+    _fail_staging_rename(monkeypatch, "c1")
+    with pytest.raises(OSError):
+        install_selection(repo, selected)
+    assert {p.name: p.read_bytes() for p in (repo / "characters/c1/source").iterdir()} == before
+    assert not (repo / "characters/c1/.source.new").exists()
+
+
+def test_install_rollback_covers_already_swapped_characters(repo, selected, monkeypatch):
+    write_png(repo / "characters/c2/source/face.png", character="c2")
+    write_png(selected / "c2/face.png", character="c2")
+    before = {
+        c: {p.name: p.read_bytes() for p in (repo / f"characters/{c}/source").iterdir()} for c in ("c1", "c2")
+    }
+    _fail_staging_rename(monkeypatch, "c2")
+    with pytest.raises(OSError):
+        install_selection(repo, selected)
+    after = {
+        c: {p.name: p.read_bytes() for p in (repo / f"characters/{c}/source").iterdir()} for c in ("c1", "c2")
+    }
+    assert after == before
+    for c in ("c1", "c2"):
+        assert not (repo / f"characters/{c}/.source.new").exists()
+        assert not (repo / f"characters/{c}/.source.old").exists()
+
+
+def test_install_multiple_characters(repo, selected):
+    write_png(selected / "c2/face.png", character="c2")
+    reports = install_selection(repo, selected)
+    assert [r.char_id for r in reports] == ["c1", "c2"]
+    assert (repo / "characters/c2/source/face.png").is_file()
+
+
+def test_install_validates_second_character_before_touching_first(repo, selected):
+    write_png(selected / "c2/face.png", character="c1")  # c2 のフォルダに c1 の絵
+    before = sorted((repo / "characters/c1/source").iterdir())
+    with pytest.raises(ConfigError, match="c2/face.png"):
+        install_selection(repo, selected)
+    assert sorted((repo / "characters/c1/source").iterdir()) == before
+
+
+def test_install_rejects_folder_without_png(repo, tmp_path):
+    d = tmp_path / "selected"
+    (d / "c1").mkdir(parents=True)
+    (d / "c1/selection.json").write_text(json.dumps({"inpaint_box": [1, 2, 3, 4]}), encoding="utf-8")
+    with pytest.raises(ConfigError, match="取り込む PNG が無い"):
+        install_selection(repo, d)
+
+
+@pytest.mark.parametrize("content", [b"[1, 2]", b"\xff\xfe\x00bad", b"null"])
+def test_install_rejects_odd_selection_json(repo, selected, content):
+    (selected / "c1/selection.json").write_bytes(content)
+    with pytest.raises(ConfigError, match="selection.json"):
+        install_selection(repo, selected)
+
+
+def test_main_reports_odd_selection_json(repo, tmp_path, selected, capsys):
+    (selected / "c1/selection.json").write_bytes(b"\xff\xfe\x00bad")
+    z = tmp_path / "p.zip"
+    with zipfile.ZipFile(z, "w") as f:
+        for p in sorted(selected.glob("c1/*")):
+            f.write(p, f"c1/{p.name}")
+    assert main([str(z), "--root", str(repo)]) == 1
+    assert "取り込めない" in capsys.readouterr().out
+
+
+@pytest.mark.parametrize("name", ["c1\\face.png", "C:face.png", "C:/c1/face.png", "c1/..\\face.png"])
+def test_extract_rejects_backslash_and_drive_prefix(repo, tmp_path, name):
+    z = tmp_path / "p.zip"
+    with zipfile.ZipFile(z, "w") as f:
+        f.writestr(name, b"x")
+    with pytest.raises(ConfigError, match="絶対パス・不正な区切り"):
+        extract_pack(z, tmp_path / "out", root=repo)
+
+
+def test_extract_rejects_duplicate_entries(repo, tmp_path):
+    z = tmp_path / "p.zip"
+    with pytest.warns(UserWarning):
+        with zipfile.ZipFile(z, "w") as f:
+            f.writestr("c1/face.png", b"a")
+            f.writestr("c1/face.png", b"b")
+    with pytest.raises(ConfigError, match="同じ名前"):
+        extract_pack(z, tmp_path / "out", root=repo)
+    assert not (tmp_path / "out").exists()
+
+
+def test_extract_rejects_too_many_entries(repo, tmp_path, monkeypatch):
+    monkeypatch.setattr("artgen.intake.MAX_ENTRIES", 1)
+    z = tmp_path / "p.zip"
+    with zipfile.ZipFile(z, "w") as f:
+        f.writestr("c1/face.png", b"a")
+        f.writestr("c1/face_hurt.png", b"b")
+    with pytest.raises(ConfigError, match="エントリが多すぎる"):
+        extract_pack(z, tmp_path / "out", root=repo)
+
+
+def test_extract_rejects_too_large_total(repo, tmp_path, monkeypatch):
+    monkeypatch.setattr("artgen.intake.MAX_TOTAL_BYTES", 10)
+    z = tmp_path / "p.zip"
+    with zipfile.ZipFile(z, "w") as f:
+        f.writestr("c1/face.png", b"x" * 11)
+    with pytest.raises(ConfigError, match="大きすぎる"):
+        extract_pack(z, tmp_path / "out", root=repo)
+    assert not (tmp_path / "out").exists()
+
+
+def test_main_exits_1_for_encrypted_zip(repo, tmp_path, capsys, monkeypatch):
+    z = tmp_path / "enc.zip"
+    with zipfile.ZipFile(z, "w") as f:
+        f.writestr("c1/face.png", b"x")
+    real_open = zipfile.ZipFile.open
+
+    def fake_open(self, *a, **k):
+        raise RuntimeError("File 'c1/face.png' is encrypted, password required for extraction")
+
+    monkeypatch.setattr(zipfile.ZipFile, "open", fake_open)
+    assert main([str(z), "--root", str(repo)]) == 1
+    assert "取り込めない" in capsys.readouterr().out
+    monkeypatch.setattr(zipfile.ZipFile, "open", real_open)

@@ -18,6 +18,8 @@ from artgen.export import _accepted_names
 from artgen.pnginfo import MissingParamsError, read_params
 
 BOX_FILE = "selection.json"
+MAX_ENTRIES = 200
+MAX_TOTAL_BYTES = 200 * 1024 * 1024
 
 
 @dataclass
@@ -35,9 +37,11 @@ def _format_box(box) -> str:
 def _read_box(selection: Path, rel: str) -> list[int] | None:
     try:
         data = json.loads(selection.read_text(encoding="utf-8"))
-    except (json.JSONDecodeError, OSError) as e:
+    except (json.JSONDecodeError, UnicodeDecodeError, OSError) as e:
         raise ConfigError(f"{rel}: 読めない: {e}") from e
-    box = data.get("inpaint_box") if isinstance(data, dict) else None
+    if not isinstance(data, dict):
+        raise ConfigError(f"{rel}: JSON のオブジェクトでない")
+    box = data.get("inpaint_box")
     if box is None:
         return None
     if (
@@ -53,10 +57,54 @@ def _visible_files(d: Path) -> list[Path]:
     return sorted(p for p in d.iterdir() if p.is_file() and not p.name.startswith("."))
 
 
+def _swap_all(items: list[tuple[str, list[Path]]], root: Path) -> None:
+    """全キャラクターの新しい source を作ってから、まとめて入れ替える。入れ替えに失敗したら元へ戻す。"""
+    staged: list[tuple[Path, Path, Path]] = []  # (staging, source_dir, backup)
+    try:
+        for char_id, pngs in items:
+            char_root = root / "characters" / char_id
+            staging = char_root / ".source.new"
+            shutil.rmtree(staging, ignore_errors=True)
+            staging.mkdir()
+            staged.append((staging, char_root / "source", char_root / ".source.old"))
+            for p in pngs:
+                shutil.copyfile(p, staging / p.name)
+    except BaseException:
+        for staging, _, _ in staged:
+            shutil.rmtree(staging, ignore_errors=True)
+        raise
+
+    done: list[tuple[Path, Path, bool]] = []  # (source_dir, backup, had_old)
+    try:
+        for staging, source_dir, backup in staged:
+            shutil.rmtree(backup, ignore_errors=True)
+            had_old = source_dir.exists()
+            if had_old:
+                source_dir.rename(backup)
+            try:
+                staging.rename(source_dir)
+            except BaseException:
+                if had_old:
+                    backup.rename(source_dir)  # このキャラクターの source を失わない
+                raise
+            done.append((source_dir, backup, had_old))
+    except BaseException:
+        for source_dir, backup, had_old in reversed(done):
+            shutil.rmtree(source_dir, ignore_errors=True)
+            if had_old:
+                backup.rename(source_dir)
+        for staging, _, _ in staged:
+            shutil.rmtree(staging, ignore_errors=True)
+        raise
+    for _, _, backup in staged:
+        shutil.rmtree(backup, ignore_errors=True)
+
+
 def install_selection(root: Path, selected_dir: Path) -> list[CharacterReport]:
     """`selected_dir/<id>/` ごとに `characters/<id>/source/` を丸ごと置き換える。
 
-    すべてのキャラクター・ファイルを検査してから書き始めるので、途中で止まっても何も書かれない。
+    すべてのキャラクター・ファイルを検査し、新しい source をすべて作ってから入れ替える。
+    入れ替えの途中で失敗したときは、入れ替え済みの分も元へ戻す。
     """
     root, selected_dir = Path(root), Path(selected_dir)
     char_dirs = sorted(p for p in selected_dir.iterdir() if p.is_dir() and not p.name.startswith("."))
@@ -102,20 +150,7 @@ def install_selection(root: Path, selected_dir: Path) -> list[CharacterReport]:
         )
         plans.append((char_id, pngs, report))
 
-    for char_id, pngs, _ in plans:
-        char_root = root / "characters" / char_id
-        staging = char_root / ".source.new"
-        shutil.rmtree(staging, ignore_errors=True)
-        staging.mkdir()
-        for p in pngs:
-            shutil.copyfile(p, staging / p.name)
-        source_dir = char_root / "source"
-        backup = char_root / ".source.old"
-        shutil.rmtree(backup, ignore_errors=True)
-        if source_dir.exists():
-            source_dir.rename(backup)
-        staging.rename(source_dir)
-        shutil.rmtree(backup, ignore_errors=True)
+    _swap_all([(char_id, pngs) for char_id, pngs, _ in plans], root)
     return [report for _, _, report in plans]
 
 
@@ -129,7 +164,17 @@ def extract_pack(zip_path: Path, dest: Path, *, root: Path) -> Path:
     expressions: dict[str, list[str]] = {}
     with zipfile.ZipFile(zip_path) as z:
         members: list[tuple[zipfile.ZipInfo, str, str]] = []
-        for info in z.infolist():
+        infos = z.infolist()
+        if len(infos) > MAX_ENTRIES:
+            raise ConfigError(f"{zip_path.name}: エントリが多すぎる（{len(infos)} 個、上限 {MAX_ENTRIES}）")
+        total = sum(i.file_size for i in infos)
+        if total > MAX_TOTAL_BYTES:
+            raise ConfigError(
+                f"{zip_path.name}: 展開後の大きさが大きすぎる（{total // (1024 * 1024)} MB、"
+                f"上限 {MAX_TOTAL_BYTES // (1024 * 1024)} MB）"
+            )
+        seen: set[tuple[str, str]] = set()
+        for info in infos:
             raw = info.filename
             where = f"{zip_path.name}: {raw}"
             if "\\" in raw or raw.startswith("/") or (len(raw) > 1 and raw[1] == ":"):
@@ -153,6 +198,9 @@ def extract_pack(zip_path: Path, dest: Path, *, root: Path) -> Path:
             accepted = _accepted_names(expressions[char_id])
             if name != BOX_FILE and name not in accepted:
                 raise ConfigError(f"{where}: 受け付けない名前（受け付ける名前: {', '.join(accepted)}）")
+            if (char_id, name) in seen:
+                raise ConfigError(f"{where}: 同じ名前のエントリが複数ある")
+            seen.add((char_id, name))
             members.append((info, char_id, name))
 
         dest.mkdir(parents=True, exist_ok=True)
@@ -173,7 +221,7 @@ def main(argv: list[str] | None = None) -> int:
         with tempfile.TemporaryDirectory() as tmp:
             selected = extract_pack(args.zip, Path(tmp) / "selected", root=args.root)
             reports = install_selection(args.root, selected)
-    except (ConfigError, MissingParamsError, zipfile.BadZipFile, OSError) as e:
+    except (ConfigError, MissingParamsError, zipfile.BadZipFile, UnicodeDecodeError, RuntimeError, OSError) as e:
         print(f"取り込めない: {e}")
         return 1
     for r in reports:
