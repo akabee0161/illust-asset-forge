@@ -129,6 +129,8 @@ class SelectionStore:
         char_dir = self.selected_dir / char_id
         # 先に新しい絵を一時ファイルへ保存する。失敗しても前の採用は動かさない
         tmp = char_dir / f".{name}.new"
+        dest = char_dir / name
+        backup = char_dir / f".{name}.old"  # 公開後に失敗しても前の絵へ戻せるように取っておく
         try:
             saved = {k: v for k, v in params.items() if k != "adopted_from_sha256"}
             saved["flipped"] = bool(flip)
@@ -138,13 +140,30 @@ class SelectionStore:
             save_png(image, tmp, saved)
             if name == FACE_NAME:
                 self._move_aside(char_dir, now())
-            os.replace(tmp, char_dir / name)
-        except BaseException:
-            self._restore_aside()  # 途中で失敗したら、前の採用に戻す
+            if dest.is_file():
+                try:
+                    shutil.copy2(dest, backup)
+                except BaseException:
+                    backup.unlink(missing_ok=True)  # 途中のコピーで前の絵を壊さない
+                    raise
+            os.replace(tmp, dest)
+        except BaseException as e:
+            # 途中で失敗したら、前の絵・表情・範囲の組み合わせに戻す。
+            # 戻す側の失敗で元の例外を隠さない（残った .old は手で戻せる）
+            try:
+                if backup.exists():
+                    if dest.is_file() and file_sha256(dest) == file_sha256(backup):
+                        backup.unlink()  # まだ公開前（前の絵のまま）
+                    else:
+                        os.replace(backup, dest)
+                self._restore_aside()
+            except Exception as restore_error:
+                e.add_note(f"前の採用へ戻せなかった: {restore_error}")
             raise
         finally:
             tmp.unlink(missing_ok=True)
-        return char_dir / name
+        backup.unlink(missing_ok=True)
+        return dest
 
     def _move_aside(self, char_dir: Path, when: datetime) -> None:
         targets = sorted(char_dir.glob("face_*.png")) + [

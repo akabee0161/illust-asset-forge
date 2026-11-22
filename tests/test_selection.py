@@ -196,6 +196,34 @@ def test_adopt_save_failure_keeps_previous_state(store, candidate, expression_ca
     assert not (d / "replaced").exists()
 
 
+def test_adopt_interrupt_after_publish_restores_whole_previous_state(
+    store, candidate, half_red_candidate, expression_candidate, monkeypatch
+):
+    store.adopt(candidate)
+    store.adopt(expression_candidate)
+    store.save_box("c1", (1, 2, 300, 400))
+    d = store.selected_dir / "c1"
+    before = {p.name: p.read_bytes() for p in d.iterdir()}
+    real_replace = os.replace
+
+    def replace_then_interrupt(src, dst, *a, **k):
+        real_replace(src, dst, *a, **k)
+        if os.path.basename(dst) == "face.png" and os.path.basename(src) == ".face.png.new":
+            raise KeyboardInterrupt
+
+    monkeypatch.setattr("artgen.selection.os.replace", replace_then_interrupt)
+    with pytest.raises(KeyboardInterrupt):
+        store.adopt(half_red_candidate)
+    monkeypatch.undo()
+    assert {p.name: p.read_bytes() for p in d.iterdir()} == before
+
+
+def test_adopt_success_leaves_no_backup_file(store, candidate, half_red_candidate):
+    store.adopt(candidate)
+    store.adopt(half_red_candidate)
+    assert sorted(p.name for p in (store.selected_dir / "c1").iterdir()) == ["face.png"]
+
+
 def test_adopt_leaves_no_temp_file(store, candidate):
     store.adopt(candidate)
     assert sorted(p.name for p in (store.selected_dir / "c1").iterdir()) == ["face.png"]
