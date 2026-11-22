@@ -16,7 +16,7 @@
 - 生成・選択・表情・全身まで、**ノートブックの中で済ませる**。採用した絵は Drive の決まった場所にまとまれば一旦よい。最後に、確定した絵だけをリポジトリにコミットする
 - 顔は**常に左を向いた**顔グラフィックにする（依頼者が見せた手本は、向きだけの参考。タッチの手本ではない）
 - 写り方は、頭から胸まで（手本の顔グラフィックくらい）。頭だけまでは寄せない
-- 画風は、候補を並べて見比べて選ぶ。依頼者が以前作った白黒の漫画の線画のプロンプトは、**やり方（シードを固定してプロンプトだけ変える）**を参考にする
+- 画風は、候補を並べて見比べて選ぶ。依頼者が以前作った白黒の漫画の線画のノートブックは、**やり方（シードを固定してプロンプトだけ変える）**だけを参考にする。白黒の線画は画風の候補に入れない
 - 選び方は、ボタンで選ぶ（下の 4 の案 A）。ボタンが崩れたときのために、同じ仕組みの関数も残す
 
 ## 2. ゴール・ゴールでないこと
@@ -31,7 +31,7 @@
 
 ゴールでないこと:
 
-- Colab から GitHub へ push する（依頼者に鍵を登録してもらう必要があるので、今回はしない）
+- Colab から GitHub へ push する（依頼者に鍵を登録してもらう必要があるので、今回はしない。ただし将来そうする前提で、取り込みの処理を分けておく。5.8）
 - 新しいキャラクターの `character.yaml` をノートブックで作る（今まで通り Claude が書き、事前に push する）
 - 顔の自動検出（`CLAUDE.md` の決まり。枠は人が見て決める）
 
@@ -112,10 +112,7 @@ illust-asset-forge/
 
 ### 5.6 画風の見比べ
 
-- `styles/` に画風の候補を数種類足す。依頼者の白黒の漫画の線画のプロンプトも、候補の 1 つとして入れる。元のプロンプトは依頼者のノートブック（2026-11-21 にチャットで受け取った。リポジトリには無い）の次のもの:
-  - prompt: `masterpiece, monochrome manga style, ink lineart, crosshatching shading, hatching texture on cheeks, thin eyelid line, single eye highlight, simple pupil, calm expression, subtle emotion, straight blunt bangs, black hair, thin eyebrows close to eyes, minimal nose, small mouth, soft round shoulders, no muscle definition, slender soft silhouette, simple hand fingers, screentone shading, traditional manga linework, masterpiece, high score, great score, absurdres`
-  - negative: `glossy eyes, multiple sparkly highlights, rainbow eyes, vivid saturated colors, airbrush smooth shading, 3D rendering, exaggerated chibi proportions, big head, thick muscle, glossy lips, photorealistic skin texture, heavy makeup`
-  - 画風の層に入れるのは、線・陰影・目の描き方などのタッチのタグだけ。髪（`straight blunt bangs, black hair`）・体つき（`soft round shoulders` など）・表情（`calm expression`）のようなキャラクター固有のタグは外す（Claude の判断）
+- `styles/` に、色付きの画風の候補を数種類足す。依頼者の白黒の漫画の線画は、候補に入れない（依頼者が不要と判断。2026-11-22）
 - `forge.compare_styles("ally05", "face", styles=[...], seeds=[...])`: 同じキャラクター・同じシードで、画風ごとに 1 枚ずつ作り、行＝画風・列＝シードの一覧で見せる。画風の名前を省略すると `styles/` の全部
 - `forge.generate`・`forge.inpaint` に `style=` の引数を足し、キャラクターの設定の画風をその場で差し替えられるようにする。差し替えは `overrides` に記録し、最後に Claude が `character.yaml` に戻す
 - 表情・全身で `style=` を省略したときは、`selected/<id>/face.png` があればその条件の画風を引き継ぎ、どの画風を使ったかを出力する。顔と表情・全身の画風が食い違うのを防ぐため（Claude の判断）
@@ -128,6 +125,7 @@ illust-asset-forge/
 ### 5.8 最後の受け渡し
 
 - `forge.pack(["ally05", ...])`（省略時は `selected/` の全員）で `selected/<id>/`（`replaced/` を除く）を zip にし、Drive の `packs/` に置く。Colab の `files.download` でダウンロードも試みる（スマホで失敗しても Drive から取れる）
+- **将来、Colab から GitHub へ直接コミットする形に変える前提で作る**（依頼者の判断。2026-11-22）。そのため取り込みを 2 つに分ける: (1) `selected/` と同じ形のフォルダを受け取り、`characters/<id>/source/` へ入れて確かめ、`character.yaml` に戻すものを一覧にする関数（zip にも Colab にも依らない）、(2) zip を展開して (1) を呼ぶコマンド。将来は Colab が Drive の `selected/` に対して (1) を呼び、YAML への書き戻しとコミット・push を足す
 - Claude 側には、zip を受け取って処理するコマンドを足す（`python -m artgen.intake <zip>`）。zip を `characters/<id>/source/` に展開し、各 PNG の条件を確かめ、`overrides`・`style` の差し替え・`selection.json` の `inpaint_box` のうち、`character.yaml` に戻す必要があるものを一覧にして出す。YAML への書き戻しは今まで通り Claude が判断して行う。その後 `python -m artgen.export <id>` で書き出す
 - `intake` は、zip に入っているキャラクターごとに `characters/<id>/source/` を**丸ごと置き換える**。古い顔から作った表情が `source/` に残り、`export` で混ざるのを防ぐため。消えたファイルの名前を出力する。消したものは git の履歴から戻せる（Claude の判断）
 - `source/` に入る PNG の名前は今と同じなので、`export` は変えない（`flipped` などのキーが増えるだけ）
