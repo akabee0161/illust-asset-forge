@@ -176,3 +176,65 @@ def test_run_paths_latest_and_named(runs):
     assert run_paths(runs) == run_paths(runs, run_ids(runs)[-1])
     with pytest.raises(ConfigError, match="run が無い"):
         run_paths(runs, "19990101_000000")
+
+
+def test_adopt_save_failure_keeps_previous_state(store, candidate, expression_candidate, monkeypatch):
+    store.adopt(candidate)
+    store.adopt(expression_candidate)
+    store.save_box("c1", (1, 2, 300, 400))
+
+    def boom(*a, **k):
+        raise OSError("disk full")
+
+    monkeypatch.setattr("artgen.selection.save_png", boom)
+    with pytest.raises(OSError):
+        store.adopt(candidate)
+    d = store.selected_dir / "c1"
+    assert (d / "face_hurt.png").is_file() and (d / "selection.json").is_file()
+    assert not (d / "replaced").exists()
+
+
+def test_adopt_leaves_no_temp_file(store, candidate):
+    store.adopt(candidate)
+    assert sorted(p.name for p in (store.selected_dir / "c1").iterdir()) == ["face.png"]
+
+
+def test_adopt_same_second_does_not_overwrite_replaced(store, candidate, expression_candidate):
+    when = lambda: datetime(2026, 11, 22, 10, 0, 0)  # noqa: E731
+    store.adopt(candidate)
+    store.adopt(expression_candidate)
+    store.adopt(candidate, now=when)
+    store.adopt(expression_candidate)
+    store.adopt(candidate, now=when)
+    replaced = store.selected_dir / "c1" / "replaced"
+    assert (replaced / "20261122_100000" / "face_hurt.png").is_file()
+    assert (replaced / "20261122_100000_2" / "face_hurt.png").is_file()
+
+
+def test_adopt_missing_character(store, tmp_path):
+    p = {k: v for k, v in FACE.items() if k != "character"}
+    c = _make(tmp_path / "x.png", p)
+    with pytest.raises(ConfigError, match="character が無い"):
+        store.adopt(c)
+
+
+@pytest.mark.parametrize("bad", ["", "../evil", "a/b", "a\\b", "..", 5, ["c1"]])
+def test_adopt_bad_character(store, tmp_path, bad):
+    c = _make(tmp_path / "x.png", {**FACE, "character": bad})
+    with pytest.raises(ConfigError, match="character"):
+        store.adopt(c)
+    assert not store.selected_dir.exists()
+    assert not (tmp_path / "evil").exists()
+
+
+def test_selected_name_source_without_expression():
+    with pytest.raises(ConfigError, match="expression"):
+        selected_name({"template": "face", "source": "face.png"})
+
+
+def test_adopt_source_without_expression_writes_nothing(store, tmp_path):
+    p = {k: v for k, v in FACE.items() if k != "expression"}
+    c = _make(tmp_path / "x.png", {**p, "source": "face.png"})
+    with pytest.raises(ConfigError, match="expression"):
+        store.adopt(c)
+    assert not store.selected_dir.exists()

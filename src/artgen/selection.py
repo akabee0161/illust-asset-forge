@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 import shutil
 import zipfile
 from collections.abc import Callable
@@ -27,9 +28,27 @@ def selected_name(params: dict) -> str:
         return "fullbody.png"
     if template == "face":
         if params.get("source"):
-            return f"face_{params.get('expression')}.png"
+            expression = params.get("expression")
+            if not isinstance(expression, str) or not expression:
+                raise ConfigError("条件に source があるのに expression が無い（表情の名前が分からない）")
+            return f"face_{expression}.png"
         return FACE_NAME
     raise ConfigError(f"条件の template が face・fullbody のどちらでもない: {template!r}")
+
+
+def _check_char_id(value: object, where: str) -> str:
+    """character はディレクトリ名に使うので、パスとして安全な文字列だけ通す。"""
+    if value is None or value == "":
+        raise ConfigError(f"{where}: 条件に character が無い")
+    if (
+        not isinstance(value, str)
+        or value in {".", ".."}
+        or ".." in value
+        or "/" in value
+        or "\\" in value
+    ):
+        raise ConfigError(f"{where}: 条件の character が使えない値: {value!r}")
+    return value
 
 
 class SelectionStore:
@@ -57,9 +76,7 @@ class SelectionStore:
         # 何も書く前に検査する
         params = read_params(candidate)
         name = selected_name(params)
-        char_id = params.get("character")
-        if not char_id:
-            raise ConfigError(f"{candidate.name}: 条件に character が無い")
+        char_id = _check_char_id(params.get("character"), candidate.name)
         if flip and name != FACE_NAME:
             raise ConfigError(f"{candidate.name}: 左右反転は顔（{FACE_NAME}）だけに使える")
         with Image.open(candidate) as im:
@@ -67,10 +84,16 @@ class SelectionStore:
         if flip:
             image = ImageOps.mirror(image)
 
-        char_dir = self.selected_dir / str(char_id)
-        if name == FACE_NAME:
-            self._move_aside(char_dir, now())
-        save_png(image, char_dir / name, {**params, "flipped": bool(flip)})
+        char_dir = self.selected_dir / char_id
+        # 先に新しい絵を一時ファイルへ保存する。失敗しても前の採用は動かさない
+        tmp = char_dir / f".{name}.new"
+        try:
+            save_png(image, tmp, {**params, "flipped": bool(flip)})
+            if name == FACE_NAME:
+                self._move_aside(char_dir, now())
+            os.replace(tmp, char_dir / name)
+        finally:
+            tmp.unlink(missing_ok=True)
         return char_dir / name
 
     def _move_aside(self, char_dir: Path, when: datetime) -> None:
@@ -79,8 +102,14 @@ class SelectionStore:
         ]
         if not targets:
             return
-        dest = char_dir / "replaced" / when.strftime(_STAMP)
-        dest.mkdir(parents=True, exist_ok=True)
+        base = char_dir / "replaced"
+        stamp = when.strftime(_STAMP)
+        dest = base / stamp
+        n = 1
+        while dest.exists():  # 同じ秒の再採用で上書きしない
+            n += 1
+            dest = base / f"{stamp}_{n}"
+        dest.mkdir(parents=True)
         for p in targets:
             shutil.move(str(p), dest / p.name)
             print(f"{char_dir.name}/{p.name} を replaced/{dest.name}/ へ移した")
