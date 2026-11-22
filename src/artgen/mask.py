@@ -52,3 +52,11 @@ def feather_composite(
         mask = mask.filter(ImageFilter.GaussianBlur(feather / 2))
         mask = ImageChops.multiply(mask, make_mask(original.size, box))
     return Image.composite(generated.convert("RGB"), original.convert("RGB"), mask)
+
+
+def overlay_box(image: Image.Image, box: Box, width: int = 6) -> Image.Image:
+    """四角に赤い枠を描いた写しを返す（元の画像は変えない）。枠は四角の内側に描く。"""
+    out = image.convert("RGB")
+    x0, y0, x1, y1 = box
+    ImageDraw.Draw(out).rectangle((x0, y0, x1 - 1, y1 - 1), outline=(255, 0, 0), width=width)
+    return out

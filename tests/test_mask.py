@@ -61,3 +61,12 @@ def test_check_feather_rejects_too_large_for_box():
     for box in [(100, 100, 140, 300), (100, 100, 300, 140), (0, 0, 48, 48)]:
         with pytest.raises(ConfigError):
             check_feather(box, 24)
+
+
+def test_overlay_box_draws_red_border_without_touching_original():
+    from artgen.mask import overlay_box
+
+    im = Image.new("RGB", (100, 100), (255, 255, 255))
+    out = overlay_box(im, (10, 10, 50, 50), width=2)
+    assert out.getpixel((10, 30)) == (255, 0, 0) and out.getpixel((30, 30)) == (255, 255, 255)
+    assert im.getpixel((10, 30)) == (255, 255, 255)

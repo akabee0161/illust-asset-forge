@@ -1,0 +1,167 @@
+"""ノートブックで候補を選び・範囲を決め・画風を見比べる画面。ipywidgets は使うときだけ import する。"""
+
+from __future__ import annotations
+
+import html
+import io
+from pathlib import Path
+
+from PIL import Image
+
+from artgen.config import ConfigError, load_template
+from artgen.mask import check_box, check_feather, overlay_box
+from artgen.pnginfo import MissingParamsError, read_params
+from artgen.selection import run_paths
+
+_HANDLED = (ConfigError, MissingParamsError, OSError)
+
+
+def _env(widgets, display):
+    if widgets is None:
+        import ipywidgets as widgets
+    if display is None:
+        from IPython.display import display
+    return widgets, display
+
+
+def _png(image: Image.Image, thumb: int) -> bytes:
+    small = image.convert("RGB")
+    small.thumbnail((thumb, thumb))
+    buf = io.BytesIO()
+    small.save(buf, format="PNG")
+    return buf.getvalue()
+
+
+def _thumb_bytes(path: Path, thumb: int) -> bytes:
+    with Image.open(path) as im:
+        return _png(im, thumb)
+
+
+def pick(forge, paths=None, run_id=None, *, widgets=None, display=None, thumb: int = 320) -> None:
+    """候補を縦に並べ、[採用]（顔の元絵だけ [左右反転して採用]）を付ける。"""
+    widgets, display = _env(widgets, display)
+    if paths is None:
+        paths = run_paths(forge.out_dir, run_id)
+    paths = [Path(p) for p in paths]
+
+    entries = []  # (char_id, path, params | None)
+    for p in paths:
+        try:
+            params = read_params(p)
+        except (MissingParamsError, OSError):
+            params = None
+        entries.append((str((params or {}).get("character", "（不明）")), p, params))
+
+    last_char = None
+    for char_id, path, params in entries:
+        if char_id != last_char:
+            display(widgets.HTML(value=f"<h3>{html.escape(char_id)}</h3>"))
+            last_char = char_id
+        seed = (params or {}).get("seed", "?")
+        caption = widgets.HTML(value=f"{html.escape(path.name)}（シード {html.escape(str(seed))}）")
+        try:
+            image = widgets.Image(value=_thumb_bytes(path, thumb), format="png")
+        except OSError as e:
+            image = widgets.HTML(value=f"画像を開けない: {html.escape(str(e))}")
+        result = widgets.Label(value="")
+
+        def adopt(flip, path=path, result=result):
+            try:
+                saved = forge.adopt(path, flip=flip)
+            except _HANDLED as e:
+                result.value = f"採用できない: {e}"
+            else:
+                result.value = f"採用: {saved.parent.name}/{saved.name}"
+
+        adopt_btn = widgets.Button(description="採用")
+        adopt_btn.on_click(lambda _b, adopt=adopt: adopt(False))
+        buttons = [adopt_btn]
+        is_plain_face = bool(params) and params.get("template") == "face" and not params.get("source")
+        if is_plain_face:
+            flip_btn = widgets.Button(description="左右反転して採用")
+            flip_btn.on_click(lambda _b, adopt=adopt: adopt(True))
+            buttons.append(flip_btn)
+        display(widgets.VBox([caption, image, widgets.HBox(buttons), result]))
+
+
+def edit_box(forge, char_id: str, *, widgets=None, display=None) -> None:
+    """採用した顔に赤枠を重ね、スライダーで範囲を動かして selection.json に保存する。"""
+    face = forge.selected.face_path(char_id)
+    if not face.is_file():
+        raise ConfigError(f"{char_id}: 顔を採用していない。顔を採用してから範囲を決める")
+    box, _source = forge.resolve_box(char_id)
+    feather = load_template(forge.root, "face").inpaint_feather
+    widgets, display = _env(widgets, display)
+    with Image.open(face) as im:
+        base = im.convert("RGB")
+
+    sliders = [
+        widgets.IntSlider(value=v, min=0, max=1024, step=8, description=name, continuous_update=False)
+        for name, v in zip(("x0", "y0", "x1", "y1"), box)
+    ]
+    preview = widgets.Image(value=b"", format="png")
+    result = widgets.Label(value="")
+
+    def current():
+        return tuple(int(s.value) for s in sliders)
+
+    def redraw(_change=None):
+        try:
+            preview.value = _png(overlay_box(base, current()), 512)
+        except Exception as e:  # 枠が逆転している間など。描けなくても画面は止めない
+            result.value = f"枠を描けない: {e}"
+
+    def save(_b):
+        b = current()
+        try:
+            check_box(b, base.size)
+            check_feather(b, feather)
+            forge.selected.save_box(char_id, b)
+        except _HANDLED as e:
+            result.value = f"決められない: {e}"
+        else:
+            result.value = f"決めた: {b}"
+
+    for s in sliders:
+        s.observe(redraw, names="value")
+    button = widgets.Button(description="この範囲で決める")
+    button.on_click(save)
+    redraw()
+    display(widgets.VBox([preview, *sliders, button, result]))
+
+
+def show_styles(paths, *, display=None, thumb: int = 256, widgets=None) -> None:
+    """行＝画風・列＝シードの一覧を 1 枚の画像で出し、行ごとに画風名を添える。"""
+    widgets, display = _env(widgets, display)
+    cells: dict[tuple[str, int], Path] = {}
+    styles: list[str] = []
+    seeds: list[int] = []
+    for p in paths:
+        params = read_params(Path(p))
+        style, seed = params.get("style"), params.get("seed")
+        if style not in styles:
+            styles.append(style)
+        if seed not in seeds:
+            seeds.append(seed)
+        cells[(style, seed)] = Path(p)
+    if not cells:
+        raise ConfigError("show_styles: 画像が 1 枚も無い")
+
+    sheet = Image.new("RGB", (thumb * len(seeds), thumb * len(styles)), (255, 255, 255))
+    for r, style in enumerate(styles):
+        for c, seed in enumerate(seeds):
+            path = cells.get((style, seed))
+            if path is None:
+                continue
+            with Image.open(path) as im:
+                small = im.convert("RGB")
+            small.thumbnail((thumb, thumb))
+            sheet.paste(small, (c * thumb, r * thumb))
+    buf = io.BytesIO()
+    sheet.save(buf, format="PNG")
+
+    seed_text = "・".join(str(s) for s in seeds)
+    display(widgets.HTML(value=f"列（左から）: シード {html.escape(seed_text)}"))
+    display(widgets.Image(value=buf.getvalue(), format="png"))
+    for r, style in enumerate(styles):
+        display(widgets.HTML(value=f"{r + 1} 行目: <b>{html.escape(str(style))}</b>"))
