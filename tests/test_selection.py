@@ -540,8 +540,30 @@ def test_run_paths_error_lists_what_exists(runs_new):
 def test_legacy_layout_still_readable(runs):
     assert [p.name for p in run_paths(runs, run_id="20261121_090000")] == ["c1_face_7.png", "c2_face_8.png"]
     assert find_candidate(runs, "c1_face_1.png").name == "c1_face_1.png"
-    with pytest.raises(ConfigError, match="候補が無い"):
+    with pytest.raises(ConfigError, match="候補が無い") as e:
         run_paths(runs, char="c1")
+    assert 'run_id="<日時>"' in str(e.value)
+    assert "古い日時: 20261121_090000・20261120_090000" in str(e.value)
+
+
+def test_legacy_hint_lists_only_newest_three(tmp_path):
+    for d in ("20261101_000000", "20261102_000000", "20261103_000000", "20261104_000000"):
+        _run(tmp_path, d, [("c1_face_1.png", 1)])
+    with pytest.raises(ConfigError, match="候補が無い") as e:
+        run_paths(tmp_path, char="c1", kind="face")
+    assert "古い日時: 20261104_000000・20261103_000000・20261102_000000）" in str(e.value)
+
+
+def test_new_layout_only_has_no_legacy_hint(runs_new):
+    with pytest.raises(ConfigError, match="候補が無い") as e:
+        run_paths(runs_new, char="zz")
+    assert "古い" not in str(e.value)
+
+
+def test_missing_run_id_lists_existing_dates_newest_first(runs):
+    with pytest.raises(ConfigError, match="run が無い: 20250101_000000") as e:
+        run_paths(runs, run_id="20250101_000000")
+    assert "ある日時: 20261121_090000・20261120_090000" in str(e.value)
 
 
 def test_mixed_layouts_same_run_id_returns_both(runs_new):

@@ -341,12 +341,17 @@ def run_paths(
     elif run_id not in ids:
         if filtered:
             raise ConfigError(_no_candidate(runs_dir, char, kind, run_id))
-        raise ConfigError(f"{runs_dir}: run が無い: {run_id}")
+        raise ConfigError(f"{runs_dir}: run が無い: {run_id}（ある日時: {_recent_ids(ids)}）")
     paths: list[Path] = []
     for rid, _c, _k, d in entries:
         if rid == run_id:
             paths.extend(d.glob("*.png"))
     return sorted(paths)
+
+
+def _recent_ids(ids: list[str], limit: int = 3) -> str:
+    """日時を新しい順に limit 個、「・」でつなぐ。"""
+    return "・".join(sorted(ids, reverse=True)[:limit])
 
 
 def _no_candidate(runs_dir: Path, char: str | None, kind: str | None, run_id: str | None = None) -> str:
@@ -357,7 +362,14 @@ def _no_candidate(runs_dir: Path, char: str | None, kind: str | None, run_id: st
     detail = f"あるキャラクター: {'・'.join(chars) or 'なし'}"
     if char in chars or (char is None and kind is not None):
         detail += f"、{'そのキャラクターの' if char else ''}種類: {'・'.join(kinds) or 'なし'}"
-    return f"{runs_dir}: 候補が無い: {cond}（{detail}）"
+    message = f"{runs_dir}: 候補が無い: {cond}（{detail}）"
+    legacy = sorted({e[0] for e in _iter_runs(runs_dir) if e[1] is None})
+    if legacy:
+        message += (
+            "。古い runs/<日時>/ は char・kind では絞れない。"
+            f'P.pick(forge, run_id="<日時>") で開く（古い日時: {_recent_ids(legacy)}）'
+        )
+    return message
 
 
 def find_candidate(runs_dir: Path, key: str | int, run_id: str | None = None) -> Path:
