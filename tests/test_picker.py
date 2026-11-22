@@ -259,3 +259,31 @@ def test_edit_box_refuses_to_save_when_face_removed(forge, fake_widgets):
     fake_widgets.created("Button")[0].click()
     assert not (forge.selected.selected_dir / "c1" / "selection.json").exists()
     assert "決められない: 顔を採用し直した" in fake_widgets.created("HTML")[-1].value
+
+
+def test_show_styles_groups_inline_style_pngs(forge, fake_widgets):
+    soft = {"name": "soft", "prompt": ["flat color"], "negative": []}
+    paths = forge.compare_styles("c1", "face", styles=["s", soft], seeds=[1])
+    show_styles(paths, display=noop, widgets=fake_widgets, thumb=32)
+    labels = [h.value for h in fake_widgets.created("HTML")]
+    assert any("<b>s</b>" in v for v in labels) and any("<b>soft</b>" in v for v in labels)
+
+
+def test_pick_with_char_and_kind_opens_latest_matching_run(forge, fake_widgets):
+    forge.generate(["c1", "c2"], "face", seeds=[1])
+    forge.generate("c1", "fullbody", seeds=[2])
+    pick(forge, char="c1", kind="face", widgets=fake_widgets, display=lambda *a: None)
+    assert [b.description for b in fake_widgets.created("Button")] == ["採用", "左右反転して採用"]  # c1 の顔 1 枚
+
+
+@pytest.mark.parametrize("extra", [{"char": "c1"}, {"kind": "face"}, {"run_id": "20261122_093000"}])
+def test_pick_paths_with_char_kind_or_run_id_is_an_error(forge, fake_widgets, extra):
+    p = forge.generate("c1", "face", seeds=[1])
+    with pytest.raises(ConfigError, match="paths"):
+        pick(forge, p, widgets=fake_widgets, display=lambda *a: None, **extra)
+
+
+def test_pick_without_filters_opens_latest_run_across_characters(forge, fake_widgets):
+    forge.generate(["c1", "c2"], "face", seeds=[1])
+    pick(forge, widgets=fake_widgets, display=lambda *a: None)
+    assert len(fake_widgets.created("Button")) == 4  # 2 人分（各 [採用]・[左右反転して採用]）

@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import re
 import shutil
 import zipfile
 from collections.abc import Callable
@@ -102,6 +103,16 @@ class SelectionStore:
         if not path.is_file():
             return None
         return read_params(path).get("style")
+
+    def face_style_definition(self, char_id: str) -> dict | None:
+        """採用した顔の条件に、その場の画風の定義（overrides.style_definition）があれば返す。"""
+        path = self.face_path(char_id)
+        if not path.is_file():
+            return None
+        overrides = read_params(path).get("overrides")
+        if not isinstance(overrides, dict):
+            return None
+        return overrides.get("style_definition")
 
     def adopt(
         self,
@@ -266,29 +277,106 @@ class SelectionStore:
         return out
 
 
+_RUN_ID = re.compile(r"\d{8}_\d{6}")
+
+
+def run_kind(template: str, expression: str | None = None, *, compare: bool = False) -> str:
+    """runs/<キャラクター>/<種類>/ の「種類」の名前。"""
+    _check_name_part(template, "template")
+    if compare:
+        return "styles" if template == "face" else f"styles-{template}"
+    if expression:
+        _check_name_part(expression, "expression")
+        return f"face-{expression}"
+    return template
+
+
+def run_dir(runs_dir: Path, char_id: str, kind: str, run_id: str) -> Path:
+    _check_name_part(char_id, "character")
+    _check_name_part(kind, "kind")
+    _check_name_part(run_id, "run_id")
+    return Path(runs_dir) / char_id / kind / run_id
+
+
+def _subdirs(path: Path) -> list[Path]:
+    return sorted(d for d in path.iterdir() if d.is_dir()) if path.is_dir() else []
+
+
+def _iter_runs(runs_dir: Path) -> list[tuple[str, str | None, str | None, Path]]:
+    """(日時, キャラクター | None, 種類 | None, フォルダ)。古い階層 runs/<日時>/ は char・kind が None。"""
+    found: list[tuple[str, str | None, str | None, Path]] = []
+    for top in _subdirs(Path(runs_dir)):
+        if _RUN_ID.fullmatch(top.name):
+            found.append((top.name, None, None, top))
+            continue
+        for kind_dir in _subdirs(top):
+            for run in _subdirs(kind_dir):
+                if _RUN_ID.fullmatch(run.name):
+                    found.append((run.name, top.name, kind_dir.name, run))
+    return found
+
+
 def run_ids(runs_dir: Path) -> list[str]:
-    runs_dir = Path(runs_dir)
-    if not runs_dir.is_dir():
-        return []
-    return sorted(d.name for d in runs_dir.iterdir() if d.is_dir())
+    return sorted({rid for rid, *_ in _iter_runs(runs_dir)})
 
 
-def run_paths(runs_dir: Path, run_id: str | None = None) -> list[Path]:
-    ids = run_ids(runs_dir)
+def run_paths(
+    runs_dir: Path,
+    run_id: str | None = None,
+    *,
+    char: str | None = None,
+    kind: str | None = None,
+) -> list[Path]:
+    entries = _iter_runs(runs_dir)
+    if not entries:
+        raise ConfigError(f"{runs_dir}: run が無い")
+    filtered = char is not None or kind is not None
+    if filtered:
+        entries = [e for e in entries if (char is None or e[1] == char) and (kind is None or e[2] == kind)]
+        if not entries:
+            raise ConfigError(_no_candidate(runs_dir, char, kind))
+    ids = sorted({e[0] for e in entries})
     if run_id is None:
-        if not ids:
-            raise ConfigError(f"{runs_dir}: run が無い")
         run_id = ids[-1]
     elif run_id not in ids:
-        raise ConfigError(f"{runs_dir}: run が無い: {run_id}")
-    return sorted((Path(runs_dir) / run_id).glob("*.png"))
+        if filtered:
+            raise ConfigError(_no_candidate(runs_dir, char, kind, run_id))
+        raise ConfigError(f"{runs_dir}: run が無い: {run_id}（ある日時: {_recent_ids(ids)}）")
+    paths: list[Path] = []
+    for rid, _c, _k, d in entries:
+        if rid == run_id:
+            paths.extend(d.glob("*.png"))
+    return sorted(paths)
+
+
+def _recent_ids(ids: list[str], limit: int = 3) -> str:
+    """日時を新しい順に limit 個、「・」でつなぐ。"""
+    return "・".join(sorted(ids, reverse=True)[:limit])
+
+
+def _no_candidate(runs_dir: Path, char: str | None, kind: str | None, run_id: str | None = None) -> str:
+    entries = [e for e in _iter_runs(runs_dir) if e[1] is not None]
+    chars = sorted({e[1] for e in entries})
+    kinds = sorted({e[2] for e in entries if char is None or e[1] == char})
+    cond = f"char={char}, kind={kind}" + (f", run_id={run_id}" if run_id else "")
+    detail = f"あるキャラクター: {'・'.join(chars) or 'なし'}"
+    if char in chars or (char is None and kind is not None):
+        detail += f"、{'そのキャラクターの' if char else ''}種類: {'・'.join(kinds) or 'なし'}"
+    message = f"{runs_dir}: 候補が無い: {cond}（{detail}）"
+    legacy = sorted({e[0] for e in _iter_runs(runs_dir) if e[1] is None})
+    if legacy:
+        message += (
+            "。古い runs/<日時>/ は char・kind では絞れない。"
+            f'P.pick(forge, run_id="<日時>") で開く（古い日時: {_recent_ids(legacy)}）'
+        )
+    return message
 
 
 def find_candidate(runs_dir: Path, key: str | int, run_id: str | None = None) -> Path:
     """ファイル名（str）は全 run から新しい順に探す（run_id 指定ならその run だけ）。シード（int）は最新の run から探す。"""
     if isinstance(key, str) and run_id is None:
-        for rid in reversed(run_ids(runs_dir)):
-            hit = Path(runs_dir) / rid / key
+        for _rid, _c, _k, d in sorted(_iter_runs(runs_dir), key=lambda e: e[0], reverse=True):
+            hit = d / key
             if hit.is_file():
                 return hit
         raise ConfigError(f"候補が見つからない: {key}")

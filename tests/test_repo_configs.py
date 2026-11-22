@@ -62,6 +62,6 @@ def test_face_template_is_left_facing_bust_with_default_box():
 
 def test_style_candidates_exist():
     names = sorted(p.stem for p in (ROOT / "styles").glob("*.yaml"))
-    assert names == ["color-anime", "retro-anime", "soft-painterly", "thick-line-flat", "watercolor"]
+    assert names == ["color-anime", "retro-anime", "soft-cel", "soft-painterly", "thick-line-flat", "watercolor"]
     for name in names:
         load_style(ROOT, name)

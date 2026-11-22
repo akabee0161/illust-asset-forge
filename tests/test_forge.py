@@ -9,6 +9,7 @@ from artgen.config import ConfigError, load_character, load_style, load_template
 from artgen.forge import MODEL_NAME, Forge
 from artgen.pnginfo import read_params
 from artgen.prompt import build_prompt
+from artgen.selection import run_paths
 
 ENV = {"commit": "abc1234", "diffusers": "0.0", "transformers": "0.0", "torch": "0.0", "gpu": "FakeGPU"}
 
@@ -52,6 +53,8 @@ def repo(tmp_path):
           "width: 832\nheight: 1216\nprompt: [full body]\nnegative: []\nexport_size: null\n")
     write(tmp_path, "characters/c1/character.yaml", CHARACTER.format(box="[100, 100, 400, 300]"))
     write(tmp_path, "characters/c2/character.yaml", CHARACTER.format(box="[100, 100, 400, 300]"))
+    write(tmp_path, "characters/badexpr/character.yaml",
+          CHARACTER.format(box="[100, 100, 400, 300]").replace("hurt: [pain]", '"a/b": [pain]'))
     write(tmp_path, "styles/t.yaml", "prompt: [watercolor]\nnegative: []\n")
     write(tmp_path, "characters/nobox/character.yaml", CHARACTER.format(box="null"))
     return tmp_path
@@ -71,7 +74,7 @@ def test_generate_saves_with_params(forge, repo, tmp_path):
     paths = forge.generate("c1", "face", seeds=[7, 8])
     assert [p.name for p in paths] == ["c1_face_7.png", "c1_face_8.png"]
     assert paths[0].parent == paths[1].parent
-    assert paths[0].parent.parent == tmp_path / "runs"
+    assert paths[0].parent.parent.parent.parent == tmp_path / "runs"
     assert re.fullmatch(r"\d{8}_\d{6}", paths[0].parent.name)
     params = read_params(paths[0])
     assert params["seed"] == 7
@@ -85,6 +88,45 @@ def test_generate_saves_with_params(forge, repo, tmp_path):
     assert params["character"] == "c1" and params["template"] == "face" and params["style"] == "s"
     assert params["run_id"] == paths[0].parent.name
     assert Image.open(paths[0]).size == (1024, 1024)
+
+
+def test_generate_saves_under_char_kind_run(forge, tmp_path):
+    p = forge.generate("c1", "face", seeds=[7])[0]
+    assert p.parent.parent.parent.parent == tmp_path / "runs"
+    assert (p.parent.parent.parent.name, p.parent.parent.name) == ("c1", "face")
+    assert re.fullmatch(r"\d{8}_\d{6}", p.parent.name) and read_params(p)["run_id"] == p.parent.name
+
+
+def test_multi_character_run_splits_dirs_with_same_run_id(forge):
+    paths = forge.generate(["c1", "c2"], "face", seeds=[7])
+    assert paths[0].parent.parent.parent.name == "c1" and paths[1].parent.parent.parent.name == "c2"
+    assert paths[0].parent.name == paths[1].parent.name
+
+
+def test_kinds_for_fullbody_expression_and_styles(forge):
+    assert forge.generate("c1", "fullbody", seeds=[1])[0].parent.parent.name == "fullbody"
+    forge.adopt(forge.generate("c1", "face", seeds=[2])[0])
+    assert forge.inpaint("c1", "hurt", seeds=[3])[0].parent.parent.name == "face-hurt"
+    assert forge.compare_styles("c1", styles=["s"], seeds=[4])[0].parent.parent.name == "styles"
+
+
+def test_unsafe_expression_name_stops_before_gpu(forge, pipe):
+    forge.adopt(forge.generate("badexpr", "face", seeds=[1])[0])
+    pipe.calls.clear()
+    with pytest.raises(ConfigError, match="ファイル名に使えない"):
+        forge.inpaint("badexpr", "a/b", seeds=[2])
+    assert pipe.calls == []
+
+
+def test_interrupted_multi_character_run_paths_match_run_paths_of_out_dir(forge, pipe):
+    def stop_on_third(path):
+        if len(pipe.calls) == 3:
+            raise KeyboardInterrupt
+    paths = forge.generate(["c1", "c2"], "face", seeds=[7, 8], on_image=stop_on_third)
+    assert [p.name for p in paths] == ["c1_face_7.png", "c1_face_8.png", "c2_face_7.png"]
+    assert all(p.is_file() for p in paths)
+    assert sorted(run_paths(forge.out_dir)) == sorted(paths)  # c1・c2 の両方が最新の日時として開ける
+    assert {p.parent.parent.parent.name for p in paths} == {"c1", "c2"}
 
 
 def test_generate_passes_prompt_and_generator(forge, repo, pipe):
@@ -468,7 +510,7 @@ def test_show_one_displays_image_and_seed(forge, monkeypatch, capsys):
 def test_generate_multiple_characters_in_one_run(forge):
     paths = forge.generate(["c1", "c2"], "face", seeds=[7, 8])
     assert [p.name for p in paths] == ["c1_face_7.png", "c1_face_8.png", "c2_face_7.png", "c2_face_8.png"]
-    assert len({p.parent for p in paths}) == 1
+    assert len({p.parent.name for p in paths}) == 1 and len({p.parent for p in paths}) == 2
 
 
 def test_generate_checks_all_characters_before_gpu(forge, pipe):
@@ -565,3 +607,109 @@ def test_inpaint_records_source_hash_and_adopt_blocks_after_readopt(forge):
     forge.adopt(forge.generate("c1", "face", seeds=[2])[0])  # 顔を採用し直す
     with pytest.raises(ConfigError, match="今の顔から作っていない"):
         forge.adopt(expr)
+
+
+# --- その場の画風 -----------------------------------------------------
+
+SOFT = {"name": "soft", "prompt": ["flat color", "thin lines"], "negative": ["gradient"]}
+
+
+def test_generate_with_inline_style_records_definition(forge, pipe):
+    p = forge.generate("c1", "face", seeds=[1], style=SOFT)[0]
+    assert "flat color" in pipe.calls[0][1]["prompt"]
+    assert "gradient" in pipe.calls[0][1]["negative_prompt"]
+    params = read_params(p)
+    assert params["style"] == "soft"
+    assert params["overrides"]["style"] == "soft"
+    assert params["overrides"]["style_definition"] == {
+        "prompt": ["flat color", "thin lines"], "negative": ["gradient"],
+    }
+
+
+def test_inline_style_matching_character_style_name_is_still_recorded(forge):
+    p = forge.generate("c1", "face", seeds=[1], style={"name": "s", "prompt": ["mine"]})[0]
+    o = read_params(p)["overrides"]
+    assert o["style"] == "s" and o["style_definition"] == {"prompt": ["mine"], "negative": []}
+
+
+def test_inline_style_wins_over_repo_style_of_same_name(forge, pipe):
+    forge.generate("c1", "face", seeds=[1], style={"name": "t", "prompt": ["inline-tag"]})
+    prompt = pipe.calls[0][1]["prompt"]
+    assert "inline-tag" in prompt and "watercolor" not in prompt
+
+
+def test_repo_style_name_records_no_definition(forge):
+    p = forge.generate("c1", "face", seeds=[1], style="t")[0]
+    assert "style_definition" not in read_params(p)["overrides"]
+
+
+def test_generate_rejects_bad_inline_style_before_gpu(forge, pipe):
+    with pytest.raises(ConfigError, match="prompt"):
+        forge.generate("c1", "face", seeds=[1], style={"name": "x", "prompt": []})
+    assert pipe.calls == []
+
+
+def test_inpaint_with_inline_style(forge, pipe):
+    forge.adopt(forge.generate("c1", "face", seeds=[1])[0])
+    pipe.calls.clear()
+    p = forge.inpaint("c1", "hurt", seeds=[3], style=SOFT)[0]
+    assert "flat color" in pipe.calls[0][1]["prompt"]
+    assert read_params(p)["overrides"]["style_definition"]["prompt"] == ["flat color", "thin lines"]
+
+
+def test_compare_styles_mixes_names_and_inline(forge, pipe):
+    paths = forge.compare_styles("c1", styles=["s", SOFT], seeds=[5])
+    assert [p.name for p in paths] == ["c1_face_s_5.png", "c1_face_soft_5.png"]
+    assert "style_definition" not in read_params(paths[0])["overrides"]
+    assert read_params(paths[1])["overrides"]["style_definition"]["negative"] == ["gradient"]
+    assert "flat color" in pipe.calls[1][1]["prompt"]
+
+
+def test_compare_styles_rejects_duplicate_inline_name_before_gpu(forge, pipe):
+    with pytest.raises(ConfigError, match="重複.*soft"):
+        forge.compare_styles("c1", styles=[SOFT, "s", {"name": "soft", "prompt": ["z"]}], seeds=[1])
+    with pytest.raises(ConfigError, match="重複.*t"):
+        forge.compare_styles("c1", styles=["t", {"name": "t", "prompt": ["z"]}], seeds=[1])
+    assert pipe.calls == []
+
+
+def test_compare_styles_rejects_bad_inline_before_gpu(forge, pipe):
+    with pytest.raises(ConfigError, match="name"):
+        forge.compare_styles("c1", styles=["s", {"name": "a/b", "prompt": ["x"]}], seeds=[1])
+    assert pipe.calls == []
+
+
+def test_inline_style_inherited_by_expression_and_fullbody(forge, pipe, capsys):
+    forge.adopt(forge.generate("c1", "face", seeds=[1], style=SOFT)[0])
+    pipe.calls.clear()
+    expr = forge.inpaint("c1", "hurt", seeds=[3])[0]
+    body = forge.generate("c1", "fullbody", seeds=[2])[0]
+    assert "flat color" in pipe.calls[0][1]["prompt"]
+    assert "flat color" in pipe.calls[1][1]["prompt"]
+    for p in (expr, body):
+        params = read_params(p)
+        assert params["style"] == "soft"
+        assert params["overrides"]["style_definition"] == {
+            "prompt": ["flat color", "thin lines"], "negative": ["gradient"],
+        }
+    assert "採用した顔" in capsys.readouterr().out
+
+
+def test_inherited_style_without_repo_file_or_definition_is_an_error(forge, pipe):
+    from artgen.pnginfo import save_png
+
+    face = forge.adopt(forge.generate("c1", "face", seeds=[1])[0])
+    params = read_params(face)
+    params["style"] = "gone"
+    save_png(Image.open(face).convert("RGB"), face, params)
+    pipe.calls.clear()
+    with pytest.raises(ConfigError, match="gone.*styles/gone.yaml|styles/gone.yaml.*gone"):
+        forge.inpaint("c1", "hurt", seeds=[3])
+    assert pipe.calls == []
+
+
+def test_style_argument_beats_inherited_definition(forge, pipe):
+    forge.adopt(forge.generate("c1", "face", seeds=[1], style=SOFT)[0])
+    p = forge.generate("c1", "fullbody", seeds=[2], style="t")[0]
+    assert read_params(p)["style"] == "t"
+    assert "style_definition" not in read_params(p)["overrides"]

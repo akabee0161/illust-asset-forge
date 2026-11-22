@@ -11,7 +11,9 @@ from artgen.pnginfo import MissingParamsError, read_params, save_png
 from artgen.selection import (
     SelectionStore,
     find_candidate,
+    run_dir,
     run_ids,
+    run_kind,
     run_paths,
     selected_name,
 )
@@ -70,6 +72,23 @@ def runs(tmp_path):
     r = tmp_path / "runs"
     _run(r, "20261120_090000", [("c1_face_1.png", 1)])
     _run(r, "20261121_090000", [("c1_face_7.png", 7), ("c2_face_8.png", 8)])
+    return r
+
+
+def _run_new(runs, char, kind, run_id, files):
+    for name, seed in files:
+        _make(runs / char / kind / run_id / name, {**FACE, "character": char, "seed": seed})
+
+
+@pytest.fixture
+def runs_new(tmp_path):
+    # c1/face/20261120_090000/c1_face_1.png, c1/face/20261121_090000/c1_face_7.png,
+    # c2/face/20261121_090000/c2_face_8.png, c1/fullbody/20261121_100000/c1_fullbody_5.png
+    r = tmp_path / "runs"
+    _run_new(r, "c1", "face", "20261120_090000", [("c1_face_1.png", 1)])
+    _run_new(r, "c1", "face", "20261121_090000", [("c1_face_7.png", 7)])
+    _run_new(r, "c2", "face", "20261121_090000", [("c2_face_8.png", 8)])
+    _run_new(r, "c1", "fullbody", "20261121_100000", [("c1_fullbody_5.png", 5)])
     return r
 
 
@@ -471,3 +490,106 @@ def test_adopt_restores_moved_files_when_move_fails_partway(
     assert len(calls) >= 2  # 2 回目で失敗し、そのあと戻しでも呼ばれる
     assert _snapshot(d) == before
     assert store.last_moved == [] and store.last_replaced is None
+
+
+def test_face_style_definition_read_from_adopted_face(store, candidate, tmp_path):
+    assert store.face_style_definition("c1") is None
+    store.adopt(candidate)
+    assert store.face_style_definition("c1") is None  # 条件に定義が無い
+    definition = {"prompt": ["a"], "negative": []}
+    with_def = _make(
+        tmp_path / "cand" / "c1_face_8.png",
+        {**FACE, "seed": 8, "overrides": {"style": "s", "style_definition": definition}},
+    )
+    store.adopt(with_def)
+    assert store.face_style_definition("c1") == definition
+
+
+def test_run_kind_names():
+    assert run_kind("face") == "face"
+    assert run_kind("fullbody") == "fullbody"
+    assert run_kind("face", "hurt") == "face-hurt"
+    assert run_kind("face", compare=True) == "styles"
+    assert run_kind("fullbody", compare=True) == "styles-fullbody"
+
+
+@pytest.mark.parametrize("bad", ["../x", "a/b", "a\\b", ".."])
+def test_run_kind_rejects_unsafe_names(bad):
+    with pytest.raises(ConfigError, match="ファイル名に使えない"):
+        run_kind("face", bad)
+
+
+def test_run_dir_layout(tmp_path):
+    assert run_dir(tmp_path, "c1", "face-hurt", "20261122_010203") == tmp_path / "c1" / "face-hurt" / "20261122_010203"
+
+
+def test_run_paths_filters_by_char_and_kind_on_new_layout(runs_new):
+    assert [p.name for p in run_paths(runs_new, char="c1", kind="face")] == ["c1_face_7.png"]
+    assert [p.name for p in run_paths(runs_new, run_id="20261121_090000")] == ["c1_face_7.png", "c2_face_8.png"]
+    assert [p.name for p in run_paths(runs_new)] == ["c1_fullbody_5.png"]
+    assert [p.name for p in run_paths(runs_new, char="c1", kind="face", run_id="20261120_090000")] == ["c1_face_1.png"]
+
+
+def test_run_paths_error_lists_what_exists(runs_new):
+    with pytest.raises(ConfigError, match=r"候補が無い.*c1.*c2"):
+        run_paths(runs_new, char="c9")
+    with pytest.raises(ConfigError, match=r"候補が無い.*face.*fullbody"):
+        run_paths(runs_new, char="c1", kind="nope")
+
+
+def test_legacy_layout_still_readable(runs):
+    assert [p.name for p in run_paths(runs, run_id="20261121_090000")] == ["c1_face_7.png", "c2_face_8.png"]
+    assert find_candidate(runs, "c1_face_1.png").name == "c1_face_1.png"
+    with pytest.raises(ConfigError, match="候補が無い") as e:
+        run_paths(runs, char="c1")
+    assert 'run_id="<日時>"' in str(e.value)
+    assert "古い日時: 20261121_090000・20261120_090000" in str(e.value)
+
+
+def test_legacy_hint_lists_only_newest_three(tmp_path):
+    for d in ("20261101_000000", "20261102_000000", "20261103_000000", "20261104_000000"):
+        _run(tmp_path, d, [("c1_face_1.png", 1)])
+    with pytest.raises(ConfigError, match="候補が無い") as e:
+        run_paths(tmp_path, char="c1", kind="face")
+    assert "古い日時: 20261104_000000・20261103_000000・20261102_000000）" in str(e.value)
+
+
+def test_new_layout_only_has_no_legacy_hint(runs_new):
+    with pytest.raises(ConfigError, match="候補が無い") as e:
+        run_paths(runs_new, char="zz")
+    assert "古い" not in str(e.value)
+
+
+def test_missing_run_id_lists_existing_dates_newest_first(runs):
+    with pytest.raises(ConfigError, match="run が無い: 20250101_000000") as e:
+        run_paths(runs, run_id="20250101_000000")
+    assert "ある日時: 20261121_090000・20261120_090000" in str(e.value)
+
+
+def test_mixed_layouts_same_run_id_returns_both(runs_new):
+    _run(runs_new, "20261121_090000", [("c3_face_9.png", 9)])
+    assert {p.name for p in run_paths(runs_new, run_id="20261121_090000")} == {"c1_face_7.png", "c2_face_8.png", "c3_face_9.png"}
+
+
+def test_mixed_layouts_seed_and_name_lookup_in_old_run(runs_new):
+    _run(runs_new, "20261122_090000", [("c3_face_9.png", 9)])
+    assert find_candidate(runs_new, 9, run_id="20261122_090000").name == "c3_face_9.png"
+    assert find_candidate(runs_new, "c3_face_9.png").parent.name == "20261122_090000"
+    assert find_candidate(runs_new, "c3_face_9.png", run_id="20261122_090000").name == "c3_face_9.png"
+
+
+def test_stray_entries_under_runs_are_ignored(runs_new):
+    (runs_new / ".ipynb_checkpoints").mkdir()
+    (runs_new / "note.txt").write_text("x")
+    (runs_new / "c1" / "face" / "not-a-run").mkdir()
+    (runs_new / "c1" / "face" / "20261130_000000.txt").write_text("x")  # 日時風の名前のファイル
+    (runs_new / "c1" / "fullbody" / "20261130_000000").write_text("x")  # 日時そのものの名前のファイル
+    assert run_ids(runs_new) == ["20261120_090000", "20261121_090000", "20261121_100000"]
+    assert [p.name for p in run_paths(runs_new)] == ["c1_fullbody_5.png"]
+
+
+def test_find_candidate_walks_new_layout(runs_new):
+    assert find_candidate(runs_new, "c2_face_8.png").parent.parent.parent.name == "c2"
+    assert find_candidate(runs_new, 5).name == "c1_fullbody_5.png"
+    with pytest.raises(ConfigError, match="見つからない"):
+        find_candidate(runs_new, "nope.png")
