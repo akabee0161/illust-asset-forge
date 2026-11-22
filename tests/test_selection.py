@@ -471,3 +471,16 @@ def test_adopt_restores_moved_files_when_move_fails_partway(
     assert len(calls) >= 2  # 2 回目で失敗し、そのあと戻しでも呼ばれる
     assert _snapshot(d) == before
     assert store.last_moved == [] and store.last_replaced is None
+
+
+def test_face_style_definition_read_from_adopted_face(store, candidate, tmp_path):
+    assert store.face_style_definition("c1") is None
+    store.adopt(candidate)
+    assert store.face_style_definition("c1") is None  # 条件に定義が無い
+    definition = {"prompt": ["a"], "negative": []}
+    with_def = _make(
+        tmp_path / "cand" / "c1_face_8.png",
+        {**FACE, "seed": 8, "overrides": {"style": "s", "style_definition": definition}},
+    )
+    store.adopt(with_def)
+    assert store.face_style_definition("c1") == definition

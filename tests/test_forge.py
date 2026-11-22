@@ -565,3 +565,109 @@ def test_inpaint_records_source_hash_and_adopt_blocks_after_readopt(forge):
     forge.adopt(forge.generate("c1", "face", seeds=[2])[0])  # 顔を採用し直す
     with pytest.raises(ConfigError, match="今の顔から作っていない"):
         forge.adopt(expr)
+
+
+# --- その場の画風 -----------------------------------------------------
+
+SOFT = {"name": "soft", "prompt": ["flat color", "thin lines"], "negative": ["gradient"]}
+
+
+def test_generate_with_inline_style_records_definition(forge, pipe):
+    p = forge.generate("c1", "face", seeds=[1], style=SOFT)[0]
+    assert "flat color" in pipe.calls[0][1]["prompt"]
+    assert "gradient" in pipe.calls[0][1]["negative_prompt"]
+    params = read_params(p)
+    assert params["style"] == "soft"
+    assert params["overrides"]["style"] == "soft"
+    assert params["overrides"]["style_definition"] == {
+        "prompt": ["flat color", "thin lines"], "negative": ["gradient"],
+    }
+
+
+def test_inline_style_matching_character_style_name_is_still_recorded(forge):
+    p = forge.generate("c1", "face", seeds=[1], style={"name": "s", "prompt": ["mine"]})[0]
+    o = read_params(p)["overrides"]
+    assert o["style"] == "s" and o["style_definition"] == {"prompt": ["mine"], "negative": []}
+
+
+def test_inline_style_wins_over_repo_style_of_same_name(forge, pipe):
+    forge.generate("c1", "face", seeds=[1], style={"name": "t", "prompt": ["inline-tag"]})
+    prompt = pipe.calls[0][1]["prompt"]
+    assert "inline-tag" in prompt and "watercolor" not in prompt
+
+
+def test_repo_style_name_records_no_definition(forge):
+    p = forge.generate("c1", "face", seeds=[1], style="t")[0]
+    assert "style_definition" not in read_params(p)["overrides"]
+
+
+def test_generate_rejects_bad_inline_style_before_gpu(forge, pipe):
+    with pytest.raises(ConfigError, match="prompt"):
+        forge.generate("c1", "face", seeds=[1], style={"name": "x", "prompt": []})
+    assert pipe.calls == []
+
+
+def test_inpaint_with_inline_style(forge, pipe):
+    forge.adopt(forge.generate("c1", "face", seeds=[1])[0])
+    pipe.calls.clear()
+    p = forge.inpaint("c1", "hurt", seeds=[3], style=SOFT)[0]
+    assert "flat color" in pipe.calls[0][1]["prompt"]
+    assert read_params(p)["overrides"]["style_definition"]["prompt"] == ["flat color", "thin lines"]
+
+
+def test_compare_styles_mixes_names_and_inline(forge, pipe):
+    paths = forge.compare_styles("c1", styles=["s", SOFT], seeds=[5])
+    assert [p.name for p in paths] == ["c1_face_s_5.png", "c1_face_soft_5.png"]
+    assert "style_definition" not in read_params(paths[0])["overrides"]
+    assert read_params(paths[1])["overrides"]["style_definition"]["negative"] == ["gradient"]
+    assert "flat color" in pipe.calls[1][1]["prompt"]
+
+
+def test_compare_styles_rejects_duplicate_inline_name_before_gpu(forge, pipe):
+    with pytest.raises(ConfigError, match="重複.*soft"):
+        forge.compare_styles("c1", styles=[SOFT, "s", {"name": "soft", "prompt": ["z"]}], seeds=[1])
+    with pytest.raises(ConfigError, match="重複.*t"):
+        forge.compare_styles("c1", styles=["t", {"name": "t", "prompt": ["z"]}], seeds=[1])
+    assert pipe.calls == []
+
+
+def test_compare_styles_rejects_bad_inline_before_gpu(forge, pipe):
+    with pytest.raises(ConfigError, match="name"):
+        forge.compare_styles("c1", styles=["s", {"name": "a/b", "prompt": ["x"]}], seeds=[1])
+    assert pipe.calls == []
+
+
+def test_inline_style_inherited_by_expression_and_fullbody(forge, pipe, capsys):
+    forge.adopt(forge.generate("c1", "face", seeds=[1], style=SOFT)[0])
+    pipe.calls.clear()
+    expr = forge.inpaint("c1", "hurt", seeds=[3])[0]
+    body = forge.generate("c1", "fullbody", seeds=[2])[0]
+    assert "flat color" in pipe.calls[0][1]["prompt"]
+    assert "flat color" in pipe.calls[1][1]["prompt"]
+    for p in (expr, body):
+        params = read_params(p)
+        assert params["style"] == "soft"
+        assert params["overrides"]["style_definition"] == {
+            "prompt": ["flat color", "thin lines"], "negative": ["gradient"],
+        }
+    assert "採用した顔" in capsys.readouterr().out
+
+
+def test_inherited_style_without_repo_file_or_definition_is_an_error(forge, pipe):
+    from artgen.pnginfo import save_png
+
+    face = forge.adopt(forge.generate("c1", "face", seeds=[1])[0])
+    params = read_params(face)
+    params["style"] = "gone"
+    save_png(Image.open(face).convert("RGB"), face, params)
+    pipe.calls.clear()
+    with pytest.raises(ConfigError, match="gone.*styles/gone.yaml|styles/gone.yaml.*gone"):
+        forge.inpaint("c1", "hurt", seeds=[3])
+    assert pipe.calls == []
+
+
+def test_style_argument_beats_inherited_definition(forge, pipe):
+    forge.adopt(forge.generate("c1", "face", seeds=[1], style=SOFT)[0])
+    p = forge.generate("c1", "fullbody", seeds=[2], style="t")[0]
+    assert read_params(p)["style"] == "t"
+    assert "style_definition" not in read_params(p)["overrides"]

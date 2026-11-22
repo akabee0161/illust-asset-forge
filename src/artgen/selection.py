@@ -103,6 +103,16 @@ class SelectionStore:
             return None
         return read_params(path).get("style")
 
+    def face_style_definition(self, char_id: str) -> dict | None:
+        """採用した顔の条件に、その場の画風の定義（overrides.style_definition）があれば返す。"""
+        path = self.face_path(char_id)
+        if not path.is_file():
+            return None
+        overrides = read_params(path).get("overrides")
+        if not isinstance(overrides, dict):
+            return None
+        return overrides.get("style_definition")
+
     def adopt(
         self,
         candidate: Path,

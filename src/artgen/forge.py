@@ -14,7 +14,9 @@ from typing import Any, Callable
 
 from PIL import Image
 
-from artgen.config import ConfigError, load_character, load_style, load_template
+from artgen.config import (
+    ConfigError, Style, inline_style, load_character, load_style, load_template,
+)
 from artgen.mask import check_box, check_feather, feather_composite, make_mask
 from artgen.pnginfo import MissingParamsError, read_params, save_png
 from artgen.prompt import Overrides, build_prompt
@@ -83,6 +85,19 @@ class Forge:
         """タグの上書きに、引数で変えた数値（None でないもの）を足して記録する。"""
         return {**overrides.to_dict(), **{k: v for k, v in values.items() if v is not None}}
 
+    def _recorded_style_overrides(
+        self, overrides: Overrides, style_ref: str | Style, style: Style, character, **values,
+    ) -> dict:
+        """_recorded_overrides に画風を足す。その場の定義（Style）は、設定の画風と同じ名前でも
+        定義ごと記録する（styles/<name>.yaml にするため）。名前だけの画風は設定と違うときだけ名前を記録する。"""
+        recorded = self._recorded_overrides(overrides, **values)
+        if isinstance(style_ref, Style):
+            recorded["style"] = style.name
+            recorded["style_definition"] = {"prompt": list(style.prompt), "negative": list(style.negative)}
+        elif style.name != character.style:
+            recorded["style"] = style.name
+        return recorded
+
     def _base_params(self, *, prompt, template, style, character, expression, overrides, seed,
                      guidance, steps, run_id) -> dict:
         return {
@@ -130,13 +145,23 @@ class Forge:
 
     # --- 生成 ---------------------------------------------------------
 
-    def resolve_style(self, char_id: str, style: str | None, inherit: bool) -> tuple[str, str]:
-        """使う画風と、その出どころ（"引数" | "採用した顔" | "設定"）を返す。"""
+    def resolve_style(
+        self, char_id: str, style: str | dict | None, inherit: bool,
+    ) -> tuple[str | Style, str]:
+        """使う画風と、その出どころ（"引数" | "引数（その場の定義）" | "採用した顔" | "設定"）を返す。
+
+        画風は、styles/ にある名前なら名前（str）、その場の定義なら Style で返す。
+        その場の定義は、同じ名前の styles/<name>.yaml があっても定義のほうが優先する。
+        採用した顔の条件に定義が残っていれば、それを使う（styles/ には無いので）。
+        """
+        if isinstance(style, dict):
+            return inline_style(style), "引数（その場の定義）"
         if style is not None:
             return style, "引数"
         if inherit:
             try:
                 adopted = self.selected.face_style(char_id)
+                definition = self.selected.face_style_definition(char_id)
             except MissingParamsError as e:
                 raise ConfigError(
                     f"{char_id}: 採用した顔 {self.selected.face_path(char_id).name} に生成の条件が無く、画風が分からない"
@@ -144,13 +169,30 @@ class Forge:
                 ) from e
             if adopted is not None:
                 print(f"{char_id}: 画風 {adopted}（採用した顔に合わせた）")
+                if definition is not None:
+                    try:
+                        return inline_style({"name": adopted, **definition}), "採用した顔"
+                    except ConfigError as e:
+                        raise ConfigError(
+                            f"{char_id}: 採用した顔の条件にある画風の定義が使えない: {e}。"
+                            "顔を候補からもう一度採用し直す"
+                        ) from e
+                if not (self.root / "styles" / f"{adopted}.yaml").is_file():
+                    raise ConfigError(
+                        f"{char_id}: 採用した顔の画風 {adopted!r} は styles/{adopted}.yaml が無く、"
+                        "条件にも定義（overrides.style_definition）が無い。"
+                        "style= で画風を渡すか、styles/ に追加してから作る"
+                    )
                 return adopted, "採用した顔"
         return load_character(self.root, char_id).style, "設定"
+
+    def _style_obj(self, style: str | Style) -> Style:
+        return style if isinstance(style, Style) else load_style(self.root, style)
 
     def _text2img_batch(
         self, entries, template, seed_list, overrides, guidance, steps, file_name, on_image,
     ) -> list[Path]:
-        """entries（(キャラクター, 画風名) の一覧）を順に、それぞれ seed_list の全シードで生成する。
+        """entries（(キャラクター, 画風) の一覧。画風は名前か、その場の定義の Style）を順に、それぞれ seed_list の全シードで生成する。
 
         GPU を回す前に、全 entries の設定・画風・プロンプトを組み立てて検証する。
         """
@@ -159,15 +201,16 @@ class Forge:
         steps_used = tpl.steps if steps is None else steps
         self._check_sampling(guidance_used, steps_used)
         plans = {}
-        for char_id, style_name in entries:
+        names = []
+        for char_id, style_ref in entries:
             character = load_character(self.root, char_id)
-            style = load_style(self.root, style_name)
+            style = self._style_obj(style_ref)
             prompt = build_prompt(style, tpl, character, overrides=overrides)
-            recorded = self._recorded_overrides(
-                overrides, guidance=guidance, steps=steps,
-                style=style_name if style_name != character.style else None,
+            recorded = self._recorded_style_overrides(
+                overrides, style_ref, style, character, guidance=guidance, steps=steps,
             )
-            plans[(char_id, style_name)] = (character, style, prompt, recorded)
+            plans[(char_id, style.name)] = (character, style, prompt, recorded)
+            names.append((char_id, style.name))
 
         run_id = datetime.now().strftime("%Y%m%d_%H%M%S")
         run_dir = self.out_dir / run_id
@@ -192,7 +235,7 @@ class Forge:
             )
             return image, params, run_dir / file_name(*entry, seed)
 
-        jobs = [(entry, seed) for entry in entries for seed in seed_list]
+        jobs = [(entry, seed) for entry in names for seed in seed_list]
         return self._run(jobs, run_dir, build, on_image)
 
     def generate(
@@ -207,9 +250,10 @@ class Forge:
         remove_negative: str = "",
         guidance: float | None = None,
         steps: int | None = None,
-        style: str | None = None,
+        style: str | dict | None = None,
         on_image: Callable[[Path], None] | None = None,
     ) -> list[Path]:
+        """style は styles/ の画風名か、その場の定義 {"name", "prompt", "negative"}。"""
         if isinstance(char_ids, str):
             char_ids = [char_ids]
         char_ids = list(char_ids)
@@ -230,18 +274,20 @@ class Forge:
         self,
         char_id: str,
         template: str = "face",
-        styles: list[str] | None = None,
+        styles: list[str | dict] | None = None,
         seeds: list[int] | None = None,
         n: int = 2,
         on_image: Callable[[Path], None] | None = None,
     ) -> list[Path]:
-        """同じシードで画風だけを変えて並べる。styles が None なら styles/ の全部（名前順）。"""
+        """同じシードで画風だけを変えて並べる。styles が None なら styles/ の全部（名前順）。
+        styles の要素は styles/ の画風名か、その場の定義の辞書（混ぜてよい）。"""
         if styles is None:
             styles = sorted(p.stem for p in (self.root / "styles").glob("*.yaml"))
         styles = list(styles)
         if not styles:
             raise ConfigError("styles: 画風が 1 つも無い")
-        _check_unique(styles, "styles")
+        styles = [inline_style(x) if isinstance(x, dict) else x for x in styles]
+        _check_unique([x.name if isinstance(x, Style) else x for x in styles], "styles")
         seed_list = self._seeds(n, seeds)
         return self._text2img_batch(
             [(char_id, s) for s in styles], template, seed_list,
@@ -296,12 +342,12 @@ class Forge:
         strength: float | None = None,
         guidance: float | None = None,
         steps: int | None = None,
-        style: str | None = None,
+        style: str | dict | None = None,
         on_image: Callable[[Path], None] | None = None,
     ) -> list[Path]:
         character = load_character(self.root, char_id)
-        style_name, _ = self.resolve_style(char_id, style, inherit=True)
-        style_obj = load_style(self.root, style_name)
+        style_ref, _ = self.resolve_style(char_id, style, inherit=True)
+        style_obj = self._style_obj(style_ref)
         tpl = load_template(self.root, "face")
         overrides = Overrides.from_args(extra, remove, extra_negative, remove_negative)
         prompt = build_prompt(style_obj, tpl, character, expression=expression, overrides=overrides)
@@ -340,9 +386,9 @@ class Forge:
         print(f"{char_id}: inpaint の範囲 {tuple(box)}（{box_from}）")
         mask = make_mask(original.size, box)
 
-        recorded = self._recorded_overrides(
-            overrides, strength=strength, guidance=guidance, steps=steps,
-            style=style_name if style_name != character.style else None,
+        recorded = self._recorded_style_overrides(
+            overrides, style_ref, style_obj, character,
+            strength=strength, guidance=guidance, steps=steps,
         )
         strength = tpl.inpaint_strength if strength is None else strength
         guidance = tpl.guidance if guidance is None else guidance

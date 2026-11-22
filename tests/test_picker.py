@@ -259,3 +259,11 @@ def test_edit_box_refuses_to_save_when_face_removed(forge, fake_widgets):
     fake_widgets.created("Button")[0].click()
     assert not (forge.selected.selected_dir / "c1" / "selection.json").exists()
     assert "決められない: 顔を採用し直した" in fake_widgets.created("HTML")[-1].value
+
+
+def test_show_styles_groups_inline_style_pngs(forge, fake_widgets):
+    soft = {"name": "soft", "prompt": ["flat color"], "negative": []}
+    paths = forge.compare_styles("c1", "face", styles=["s", soft], seeds=[1])
+    show_styles(paths, display=noop, widgets=fake_widgets, thumb=32)
+    labels = [h.value for h in fake_widgets.created("HTML")]
+    assert any("<b>s</b>" in v for v in labels) and any("<b>soft</b>" in v for v in labels)
