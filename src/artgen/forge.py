@@ -1,6 +1,6 @@
 """Colab 側の入口。パイプラインを外から受け取る作りで、GPU なしでもテストできる。
 
-torch・diffusers・IPython は `load()` と `show()` の中でだけ import する。
+torch・diffusers・IPython は `load_pipeline()`・`attach()`・`show()` の中でだけ import する。
 """
 
 from __future__ import annotations
@@ -18,11 +18,11 @@ from artgen.config import ConfigError, load_character, load_style, load_template
 from artgen.mask import check_box, check_feather, feather_composite, make_mask
 from artgen.pnginfo import MissingParamsError, read_params, save_png
 from artgen.prompt import Overrides, build_prompt
-from artgen.selection import SelectionStore
+from artgen.selection import SelectionStore, find_candidate
 
 MODEL_NAME = "cagliostrolab/animagine-xl-4.0"
 SAMPLER_NAME = "Euler a"
-DEFAULT_OUT_DIR = "/content/drive/MyDrive/illust-asset-forge/runs"
+DEFAULT_BASE_DIR = "/content/drive/MyDrive/illust-asset-forge"
 MAX_SEED = 2**32 - 1
 
 
@@ -243,11 +243,40 @@ class Forge:
 
     # --- 表情（inpaint） -----------------------------------------------
 
+    def resolve_box(self, char_id: str) -> tuple[tuple[int, int, int, int], str]:
+        """inpaint の範囲と出どころ（"selection.json" | "character.yaml" | "型の既定"）を返す。"""
+        box = self.selected.read_box(char_id)
+        if box is not None:
+            return box, "selection.json"
+        character = load_character(self.root, char_id)
+        if character.inpaint_box is not None:
+            return character.inpaint_box, "character.yaml"
+        tpl = load_template(self.root, "face")
+        if tpl.inpaint_box is not None:
+            return tpl.inpaint_box, "型の既定"
+        raise ConfigError(
+            f"{char_id}: inpaint_box: 範囲がどこにも無い。範囲のセルで決めて selection.json に保存するか、"
+            f"characters/{char_id}/character.yaml の inpaint_box か templates/face.yaml の inpaint.box に書く"
+        )
+
+    def adopt(
+        self, candidate: str | int | Path, flip: bool = False, run_id: str | None = None,
+    ) -> Path:
+        """候補を採用する。Path で存在すればそれを、そうでなければ最新の run（run_id 指定可）から探す。"""
+        if isinstance(candidate, Path) and candidate.is_file():
+            path = candidate
+        else:
+            path = find_candidate(self.out_dir, str(candidate) if isinstance(candidate, Path) else candidate, run_id)
+        return self.selected.adopt(path, flip=flip)
+
+    def pack(self, char_ids: list[str] | None = None) -> Path:
+        return self.selected.pack(char_ids)
+
     def inpaint(
         self,
         char_id: str,
         expression: str,
-        source: str | Path,
+        source: str | Path | None = None,
         n: int = 4,
         seeds: list[int] | None = None,
         extra: str = "",
@@ -257,22 +286,26 @@ class Forge:
         strength: float | None = None,
         guidance: float | None = None,
         steps: int | None = None,
+        style: str | None = None,
         on_image: Callable[[Path], None] | None = None,
     ) -> list[Path]:
         character = load_character(self.root, char_id)
-        style = load_style(self.root, character.style)
+        style_name, _ = self.resolve_style(char_id, style, inherit=True)
+        style_obj = load_style(self.root, style_name)
         tpl = load_template(self.root, "face")
         overrides = Overrides.from_args(extra, remove, extra_negative, remove_negative)
-        prompt = build_prompt(style, tpl, character, expression=expression, overrides=overrides)
+        prompt = build_prompt(style_obj, tpl, character, expression=expression, overrides=overrides)
 
         # GPU を回す前に、入力の誤りをすべて止める
-        if character.inpaint_box is None:
-            raise ConfigError(
-                f"characters/{char_id}/character.yaml: inpaint_box: 未記入。"
-                "採用した顔を Claude に渡し、inpaint_box を書いてもらう"
-            )
+        box, box_from = self.resolve_box(char_id)
         if tpl.inpaint_strength is None or tpl.inpaint_feather is None:
             raise ConfigError("templates/face.yaml: inpaint: strength と feather が無い")
+        if source is None:
+            source = self.selected.face_path(char_id)
+            if not source.is_file():
+                raise ConfigError(
+                    f"source: {char_id} の顔を採用していない。顔のセルで採用するか、source= にパスを渡す"
+                )
         source = Path(source)
         if not source.is_file():
             raise ConfigError(f"source: ファイルが無い: {source}")
@@ -283,15 +316,23 @@ class Forge:
                 f"source: 画像の大きさが型 face と違う: {original.size[0]}x{original.size[1]}"
                 f"（必要: {tpl.width}x{tpl.height}）"
             )
-        box = character.inpaint_box
+        box_file = {
+            "selection.json": f"selected/{char_id}/selection.json",
+            "character.yaml": f"characters/{char_id}/character.yaml",
+            "型の既定": "templates/face.yaml",
+        }[box_from]
         try:
             check_box(box, original.size)
             check_feather(box, tpl.inpaint_feather)
         except ConfigError as e:
-            raise ConfigError(f"characters/{char_id}/character.yaml: {e}") from e
+            raise ConfigError(f"{box_file}: {e}") from e
+        print(f"{char_id}: inpaint の範囲 {tuple(box)}（{box_from}）")
         mask = make_mask(original.size, box)
 
-        recorded = self._recorded_overrides(overrides, strength=strength, guidance=guidance, steps=steps)
+        recorded = self._recorded_overrides(
+            overrides, strength=strength, guidance=guidance, steps=steps,
+            style=style_name if style_name != character.style else None,
+        )
         strength = tpl.inpaint_strength if strength is None else strength
         guidance = tpl.guidance if guidance is None else guidance
         steps = tpl.steps if steps is None else steps
@@ -317,7 +358,7 @@ class Forge:
             ).images[0]
             result = feather_composite(original, generated, box, tpl.inpaint_feather)
             params = self._base_params(
-                prompt=prompt, template=tpl, style=style, character=character,
+                prompt=prompt, template=tpl, style=style_obj, character=character,
                 expression=expression, overrides=recorded, seed=seed,
                 guidance=guidance, steps=steps, run_id=run_id,
             )
@@ -343,7 +384,7 @@ def _git_commit(root: Path) -> str:
         return "unknown"
 
 
-def load(root: str | Path = ".", out_dir: str | Path = DEFAULT_OUT_DIR, low_memory: bool = False) -> Forge:
+def load_pipeline(low_memory: bool = False) -> Any:
     """Colab でモデルを読み込む。GPU が要る（サーバーでは動かさない）。
 
     low_memory=True にすると、メモリ節約の設定（attention slicing・VAE の分割）を入れる。
@@ -351,7 +392,6 @@ def load(root: str | Path = ".", out_dir: str | Path = DEFAULT_OUT_DIR, low_memo
     """
     import diffusers
     import torch
-    import transformers
     from diffusers import EulerAncestralDiscreteScheduler, StableDiffusionXLPipeline
 
     pipe = StableDiffusionXLPipeline.from_pretrained(
@@ -372,9 +412,18 @@ def load(root: str | Path = ".", out_dir: str | Path = DEFAULT_OUT_DIR, low_memo
         pipe.vae.enable_tiling()
     torch.backends.cudnn.deterministic = True
     torch.backends.cudnn.benchmark = False
+    return pipe
+
+
+def attach(pipe: Any, root: str | Path = ".", base_dir: str | Path = DEFAULT_BASE_DIR) -> Forge:
+    """読み込み済みのパイプラインに Forge をつなぐ。版と commit は呼ぶたびに読み直す
+    （pull した後の commit を記録するため）。"""
+    import diffusers
+    import torch
+    import transformers
 
     root = Path(root).resolve()
-    out_dir = Path(out_dir)
+    out_dir = Path(base_dir) / "runs"
     out_dir.mkdir(parents=True, exist_ok=True)
     env = {
         "commit": _git_commit(root),
