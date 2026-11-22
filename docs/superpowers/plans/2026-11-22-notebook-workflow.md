@@ -578,8 +578,8 @@ Expected: FAIL
 
 - `extract_pack`: 各エントリが `<id>/<名前>` の 2 段で、`..`・絶対パス・それ以上の深さが無いことを全部確かめてから展開する。`<id>` は `characters/<id>/character.yaml` がある ID だけ（無ければ `ConfigError`）
 - `install_selection`: すべてのキャラクター・ファイルを検査（名前が受け付ける一覧にあるか、条件があるか、`character` が一致するか）してから書く。`selection.json` は `source/` に入れず、`inpaint_box` を書き戻しの一覧に使う
-- 書き戻しの一覧: 各 PNG の `overrides`（`style` を含む）が空でなければ `"<名前>: overrides: <JSON>"`、`selection.json` の枠が `character.inpaint_box` と違えば `"inpaint_box: <枠> を character.yaml へ"`
-- `main`: 報告の後に「次は character.yaml に書き戻し、python -m artgen.export <id>」と出す
+- 書き戻しの一覧: 各 PNG の `overrides`（`style` を含む）が空でなければ `"<名前>: overrides: <JSON>"`、`selection.json` の枠が `character.inpaint_box` と違えば `"inpaint_box: <枠> を character.yaml へ"`（`<枠>` は `[x0, y0, x1, y1]` の形の文字。タプルの `(…)` にしない。テストが見る）
+- `main`: 報告の後に「次: 上の一覧を character.yaml に書き戻す。そのあと python -m artgen.export <id>」と出す（テストが「書き戻す」の文字列を見る）
 
 - [ ] **Step 4: 通ることを確かめる**
 
