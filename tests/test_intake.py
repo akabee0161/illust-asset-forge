@@ -375,3 +375,26 @@ def test_install_rejects_expression_made_from_flipped_candidate(repo, selected):
     _expression_with_hash(selected / "c1/face_hurt.png", cand)
     with pytest.raises(ConfigError, match="今の顔から作っていない"):
         install_selection(repo, selected)
+
+
+_BAD_BOXES = [[1, 2, 3], [-1, 0, 5, 5], [5, 0, 5, 9], [0, 9, 5, 3], [0, 0, 1.5, 4], [0, 0, True, 4], "x"]
+
+
+@pytest.mark.parametrize("box", _BAD_BOXES)
+def test_install_rejects_invalid_box_in_selection_json(repo, selected, box):
+    (selected / "c1/selection.json").write_text(json.dumps({"inpaint_box": box}), encoding="utf-8")
+    before = {p.name: p.read_bytes() for p in (repo / "characters/c1/source").iterdir()}
+    with pytest.raises(ConfigError, match=r"c1/selection\.json: inpaint_box"):
+        install_selection(repo, selected)
+    assert {p.name: p.read_bytes() for p in (repo / "characters/c1/source").iterdir()} == before
+    assert not (repo / "characters/c1/.source.new").exists()
+
+
+@pytest.mark.parametrize("box", _BAD_BOXES)
+def test_install_rejects_invalid_box_in_expression_png(repo, selected, box):
+    _expr_with_box(selected / "c1/face_hurt.png", box)
+    before = {p.name: p.read_bytes() for p in (repo / "characters/c1/source").iterdir()}
+    with pytest.raises(ConfigError, match=r"c1/face_hurt\.png: inpaint_box"):
+        install_selection(repo, selected)
+    assert {p.name: p.read_bytes() for p in (repo / "characters/c1/source").iterdir()} == before
+    assert not (repo / "characters/c1/.source.new").exists()

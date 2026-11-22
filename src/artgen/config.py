@@ -59,6 +59,18 @@ def has_unbalanced_parens(tag: str) -> bool:
     return tag.count("(") != tag.count(")") or tag.count("[") != tag.count("]")
 
 
+def parse_box(rel: str, where: str, value: Any) -> tuple[int, int, int, int]:
+    """[x0, y0, x1, y1] を検査して返す（0 以上の整数で x0<x1・y0<y1）。"""
+    if not isinstance(value, list) or len(value) != 4:
+        raise ConfigError(f"{rel}: {where}: [x0, y0, x1, y1] の 4 つの整数でない")
+    if any(isinstance(v, bool) or not isinstance(v, int) for v in value):
+        raise ConfigError(f"{rel}: {where}: 整数でない")
+    x0, y0, x1, y1 = value
+    if x0 < 0 or y0 < 0 or x0 >= x1 or y0 >= y1:
+        raise ConfigError(f"{rel}: {where}: x0<x1・y0<y1 で 0 以上の四角でない: {value}")
+    return (x0, y0, x1, y1)
+
+
 class _Reader:
     """1 つの YAML の各キーを検査して取り出す。エラーにはファイルの相対パスを付ける。"""
 
@@ -122,12 +134,7 @@ class _Reader:
         return value
 
     def box(self, where: str, value: Any) -> tuple[int, int, int, int]:
-        if not isinstance(value, list) or len(value) != 4:
-            raise self.fail(where, "[x0, y0, x1, y1] の 4 つの整数でない")
-        x0, y0, x1, y1 = (self.as_int(where, v, positive=False) for v in value)
-        if x0 < 0 or y0 < 0 or x0 >= x1 or y0 >= y1:
-            raise self.fail(where, f"x0<x1・y0<y1 で 0 以上の四角でない: {value}")
-        return (x0, y0, x1, y1)
+        return parse_box(self.rel, where, value)
 
 
 def load_style(root: Path, name: str) -> Style:

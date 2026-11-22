@@ -15,7 +15,7 @@ from pathlib import Path, PurePosixPath
 
 from PIL import Image
 
-from artgen.config import ConfigError, load_character
+from artgen.config import ConfigError, load_character, parse_box
 from artgen.export import _accepted_names
 from artgen.pnginfo import MissingParamsError, read_params
 from artgen.selection import check_expression_source
@@ -47,13 +47,7 @@ def _read_box(selection: Path, rel: str) -> list[int] | None:
     box = data.get("inpaint_box")
     if box is None:
         return None
-    if (
-        not isinstance(box, list)
-        or len(box) != 4
-        or any(isinstance(v, bool) or not isinstance(v, int) for v in box)
-    ):
-        raise ConfigError(f"{rel}: inpaint_box: 整数 4 つの [x0, y0, x1, y1] でない")
-    return box
+    return list(parse_box(rel, "inpaint_box", box))
 
 
 def _visible_files(d: Path) -> list[Path]:
@@ -135,14 +129,11 @@ def install_selection(root: Path, selected_dir: Path) -> list[CharacterReport]:
             if owner != char_id:
                 raise ConfigError(f"{where}: 条件の character が {owner!r}（{char_id!r} の絵でない）")
             pngs.append(p)
-            used = params.get("inpaint_box")
-            if (
-                isinstance(used, list)
-                and len(used) == 4
-                and all(isinstance(v, int) and not isinstance(v, bool) for v in used)
-                and used not in used_boxes
-            ):
-                used_boxes.append(used)
+            used_raw = params.get("inpaint_box")
+            if used_raw is not None:
+                used = list(parse_box(where, "inpaint_box", used_raw))
+                if used not in used_boxes:
+                    used_boxes.append(used)
             if p.name not in ("face.png", "fullbody.png"):
                 check_expression_source(params, char_dir / "face.png", where)
             overrides = params.get("overrides")
