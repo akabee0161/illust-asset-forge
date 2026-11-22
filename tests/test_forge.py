@@ -9,6 +9,7 @@ from artgen.config import ConfigError, load_character, load_style, load_template
 from artgen.forge import MODEL_NAME, Forge
 from artgen.pnginfo import read_params
 from artgen.prompt import build_prompt
+from artgen.selection import run_paths
 
 ENV = {"commit": "abc1234", "diffusers": "0.0", "transformers": "0.0", "torch": "0.0", "gpu": "FakeGPU"}
 
@@ -117,13 +118,15 @@ def test_unsafe_expression_name_stops_before_gpu(forge, pipe):
     assert pipe.calls == []
 
 
-def test_interrupted_multi_character_run_returns_paths_usable_by_pick(forge, pipe):
+def test_interrupted_multi_character_run_paths_match_run_paths_of_out_dir(forge, pipe):
     def stop_on_third(path):
         if len(pipe.calls) == 3:
             raise KeyboardInterrupt
     paths = forge.generate(["c1", "c2"], "face", seeds=[7, 8], on_image=stop_on_third)
     assert [p.name for p in paths] == ["c1_face_7.png", "c1_face_8.png", "c2_face_7.png"]
     assert all(p.is_file() for p in paths)
+    assert sorted(run_paths(forge.out_dir)) == sorted(paths)  # c1・c2 の両方が最新の日時として開ける
+    assert {p.parent.parent.parent.name for p in paths} == {"c1", "c2"}
 
 
 def test_generate_passes_prompt_and_generator(forge, repo, pipe):

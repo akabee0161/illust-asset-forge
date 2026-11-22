@@ -217,7 +217,6 @@ class Forge:
             )
             names.append((char_id, style.name))
 
-
         def build(job):
             entry, seed = job
             character, style, prompt, recorded, entry_dir = plans[entry]
@@ -401,7 +400,6 @@ class Forge:
         steps = tpl.steps if steps is None else steps
         self._check_sampling(guidance, steps, strength)
         seed_list = self._seeds(n, seeds)
-
 
         def build(seed: int):
             generated = self.pipe.inpaint(
