@@ -13,6 +13,7 @@
 - 採用した絵は、依頼者がノートブックのまとめのセルで作った zip で届く。**`python -m artgen.intake <zip>` で `source/` に取り込む**（`face.png`・`face_<表情>.png`・`fullbody.png` の名前、PNG に条件があること、キャラクターの一致を検査し、通らなければ何も書かずに止まる）。条件が無いときは添付で消えた可能性があるので、依頼者に知らせて止める
 - `intake` は `source/` を丸ごと置き換える。出力の「消した」に意図しないもの（特に `face.png`）があるときはコミットせず、依頼者に確かめる
 - `intake` の出力にある書き戻しの一覧を、`character.yaml` などの設定に戻してからコミットする（以後は上書きなしで同じプロンプトになるように）。条件の `overrides` の `style` は `character.yaml` の `style` に戻す
+- 書き戻しの一覧に `overrides.style_definition`（その場で書いた画風の定義）があるときは、その `prompt`・`negative` で `styles/<style>.yaml` を作る。依頼者がその画風を使いたいときは `character.yaml` の `style` もそれにする
 - 表情の範囲（`inpaint_box`）は、依頼者がノートブックで決め、`selection.json` で届く。Claude は `intake` の一覧を見て `character.yaml` に書き戻す。顔の自動検出は入れず、Claude が顔を見て範囲を決めることもしない
 - 書き出しは `python -m artgen.export <id>`
 

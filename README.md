@@ -49,6 +49,7 @@ Drive の `illust-asset-forge/` の下の置き場:
    - **準備**: Drive をつなぎ、リポジトリを clone（2 回目以降は pull）し、ライブラリを入れる。Claude が設定を直して push した後は、このセルだけ実行し直せば取り込める（モデルは読み込み直さない）
    - **モデルの読み込み**: `pipe` が無いときだけ `F.load_pipeline()` で読み込む（数分）。メモリ不足で止まったときだけ `F.load_pipeline(low_memory=True)` にする（遅くなる）。続けて `forge = F.attach(pipe, ".")` で、読み込み済みのパイプラインに設定を結びつける
    - **画風の見比べ（任意）**: `forge.compare_styles(CHAR, n=2)` が、同じシードで画風だけを変えた顔を作り、`P.show_styles(paths)` で画風ごとに並べる。気に入った画風名を後ろの `STYLE` に書く
+     - **その場で画風を書く**: YAML を書いて push しなくても、`style=` と `compare_styles(styles=[...])` の要素に `{"name": "my-style", "prompt": ["flat color"], "negative": ["gradient"]}` のような辞書を渡せる（`name` は半角英数字・`_`・`-` だけ。画風名と混ぜてよい。同じ名前の `styles/<name>.yaml` があっても、その場の定義が優先する）。定義は PNG の条件の `overrides.style_definition` に残り、顔を採用すれば表情・全身にも引き継がれる。気に入ったら zip（または辞書）を Claude に渡すと、`styles/<name>.yaml` にしてもらえる
    - **顔**: `forge.generate(CHARS, "face", n=4, style=STYLE, on_image=F.show_one)`。`CHARS` に並べたキャラクターをまとめて作り、1 枚できるたびに表示される。調整中は `n=2` など少なくし、気に入らなければ ■ で止めて作り直す（止めても、できた分は Drive に残る）。一気に作るときは `n=16` などにして、後から `P.pick(forge, run_id=None)`（中断・切断の後も同じ）で候補を開き直す。`P.pick(forge, paths)` の画面で、採用する顔のボタンを押す
    - **表情の範囲**: `P.edit_box(forge, CHAR)` が、採用した顔に目と口の赤枠を重ね、スライダーで動かして `selection.json` に保存する。キャラクターごとに表情を作る前に 1 回
    - **表情**: `forge.inpaint(CHAR, "hurt", n=4, on_image=F.show_one)` のあと `P.pick(forge, paths)`。採用した顔と決めた範囲を使うので、パスは書かない
