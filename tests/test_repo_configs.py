@@ -1,3 +1,4 @@
+import re
 from pathlib import Path
 
 import pytest
@@ -77,3 +78,23 @@ def test_style_candidates_exist():
     assert names == ["color-anime", "retro-anime", "soft-cel", "soft-painterly", "thick-line-flat", "watercolor"]
     for name in names:
         load_style(ROOT, name)
+
+
+def test_sample_characters_are_the_four_generic_ones():
+    assert CHARACTER_IDS == ["knight", "mage", "schoolboy", "schoolgirl"]
+
+
+def test_no_game_ids_or_trial_style_names():
+    assert not [c for c in CHARACTER_IDS if re.fullmatch(r"ally\d+", c)]
+    styles = sorted(p.stem for p in (ROOT / "styles").glob("*.yaml"))
+    assert not [s for s in styles if s.startswith("tlf-")]
+
+
+SAMPLE_IDS = ["knight", "mage", "schoolboy", "schoolgirl"]
+
+
+@pytest.mark.parametrize("char_id", SAMPLE_IDS)  # 見本だけ。コピーした先で足す作品のキャラクターには当てはめない
+def test_samples_have_no_style_or_inpaint_box(char_id):
+    data = yaml.safe_load((ROOT / "characters" / char_id / "character.yaml").read_text(encoding="utf-8"))
+    assert "style" not in data and "inpaint_box" not in data
+    assert set(data["expressions"]) == {"normal", "hurt", "shout"}

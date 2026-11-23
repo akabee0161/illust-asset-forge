@@ -287,3 +287,14 @@ def test_pick_without_filters_opens_latest_run_across_characters(forge, fake_wid
     forge.generate(["c1", "c2"], "face", seeds=[1])
     pick(forge, widgets=fake_widgets, display=lambda *a: None)
     assert len(fake_widgets.created("Button")) == 4  # 2 人分（各 [採用]・[左右反転して採用]）
+
+
+def test_pick_sets_display_size_so_the_image_is_not_stretched(forge, fake_widgets):
+    import io
+
+    p = forge.generate("c1", "face", seeds=[1])[0]
+    pick(forge, [p], widgets=fake_widgets, display=noop, thumb=32)
+    (image,) = fake_widgets.created("Image")
+    with Image.open(io.BytesIO(image.value)) as shown:
+        assert max(shown.size) == 32
+        assert (int(image.width), int(image.height)) == shown.size

@@ -86,3 +86,71 @@ def test_notebook_reopen_cell_filters_by_char_and_kind():
     idx = next(i for i, c in enumerate(cells) if c["cell_type"] == "markdown" and "".join(c["source"]).startswith("## 5. 候補を開き直す"))
     src = "".join(cells[idx + 1]["source"])
     assert src.startswith("CHAR = ") and "P.pick(forge, char=CHAR, kind=KIND)" in src
+
+
+def prepare_assigns():
+    """準備のセル（最初のコードのセル）の、モジュール直下の「名前 = リテラル」を辞書にする。"""
+    src = code_cells()[1][0]
+    lines = [ln for ln in src.splitlines() if not ln.lstrip().startswith(("!", "%"))]
+    out = {}
+    for node in ast.parse("\n".join(lines)).body:
+        if isinstance(node, ast.Assign) and len(node.targets) == 1 and isinstance(node.targets[0], ast.Name):
+            try:
+                out[node.targets[0].id] = ast.literal_eval(node.value)
+            except ValueError:
+                pass
+    return out
+
+
+def test_prepare_cell_has_source_variables_with_forge_defaults():
+    a = prepare_assigns()
+    assert a["REPO_URL"] == "https://github.com/akabee0161/illust-asset-forge.git"
+    assert a["REPO_BRANCH"] == "main"
+    assert a["SUBDIR"] == ""
+    assert a["DRIVE_DIR"] == "/content/drive/MyDrive/illust-asset-forge"
+
+
+def test_notebook_passes_drive_dir_to_attach():
+    _, cells = code_cells()
+    code = "\n".join(cells)
+    assert code.count("F.attach(") == code.count("base_dir=DRIVE_DIR")
+    assert "illust-asset-forge.git" not in "\n".join(cells[1:])  # URL は準備のセルの変数だけ
+
+
+def test_prepare_cell_switches_branch_before_pull():
+    src = code_cells()[1][0]
+    assert "REPO_BRANCH" in src
+    assert src.index("checkout") < src.index("pull")  # 切り替えてから pull
+
+
+def test_prepare_cell_refuses_other_repo_clone():
+    src = code_cells()[1][0]
+    assert "remote" in src and "get-url" in src and "raise" in src
+
+
+def test_prepare_cell_uses_forge_root_everywhere():
+    src = code_cells()[1][0]
+    assert "os.chdir(ROOT)" in src
+    assert "{ROOT}/requirements-colab.txt" in src and "{ROOT}" in src
+    assert 'os.path.join(ROOT, "src")' in src
+
+
+def test_prepare_cell_quotes_root_in_shell_commands():
+    # SUBDIR に空白があっても、パスが 1 つの引数として pip に渡る
+    src = code_cells()[1][0]
+    assert '-r "{ROOT}/requirements-colab.txt"' in src
+    assert '-e "{ROOT}"' in src
+
+
+def test_prepare_cell_moves_current_src_to_front_of_sys_path():
+    import os
+    import types
+
+    src = code_cells()[1][0]
+    text = "\n".join(ln for ln in src.splitlines() if not ln.lstrip().startswith(("!", "%")))
+    nodes = [n for n in ast.parse(text).body if "SRC" in ast.get_source_segment(text, n)]
+    assert nodes
+    # 同じカーネルで ROOT を A → B → A と変えた後でも、A の src が先頭になる
+    fake_sys = types.SimpleNamespace(path=["/b/src", "/a/src", "/other"])
+    exec("\n".join(ast.get_source_segment(text, n) for n in nodes), {"os": os, "sys": fake_sys, "ROOT": "/a"})
+    assert fake_sys.path == ["/a/src", "/b/src", "/other"]

@@ -70,7 +70,11 @@ def pick(forge, paths=None, run_id=None, *, char=None, kind=None, widgets=None, 
         seed = (params or {}).get("seed", "?")
         caption = widgets.HTML(value=f"{html.escape(path.name)}（シード {html.escape(str(seed))}）")
         try:
-            image = widgets.Image(value=_thumb_bytes(path, thumb), format="png")
+            data = _thumb_bytes(path, thumb)
+            with Image.open(io.BytesIO(data)) as small:
+                width, height = small.size
+            # 大きさを渡さないと、Colab が出力欄の幅まで引き伸ばして表示する
+            image = widgets.Image(value=data, format="png", width=width, height=height)
         except OSError as e:
             image = widgets.HTML(value=f"画像を開けない: {html.escape(str(e))}")
         result = widgets.HTML(value="")  # Label は折り返さないので HTML にする

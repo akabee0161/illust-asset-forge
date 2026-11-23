@@ -6,7 +6,7 @@ from artgen.pnginfo import MissingParamsError, main, read_params, save_png
 
 def test_roundtrip(tmp_path):
     p = tmp_path / "out" / "a.png"
-    params = {"seed": 1, "prompt": "ボルグ, 1boy"}
+    params = {"seed": 1, "prompt": "騎士, 1boy"}
     save_png(Image.new("RGB", (8, 8)), p, params)
     assert read_params(p) == params
 
