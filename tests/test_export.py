@@ -31,7 +31,7 @@ def put(repo, name, size, template, seed=1, params=True):
     path = repo / "characters/c1/source" / name
     image = Image.new("RGB", size, (10, 20, 30))
     if params:
-        save_png(image, path, {"seed": seed, "template": template, "prompt": "ボルグ"})
+        save_png(image, path, {"seed": seed, "template": template, "prompt": "騎士"})
     else:
         path.parent.mkdir(parents=True, exist_ok=True)
         image.save(path)
@@ -65,7 +65,7 @@ def test_params_json(repo):
     data = json.loads(text)
     assert list(data) == ["face.png", "fullbody.png"]
     assert data["face.png"]["seed"] == 11
-    assert "ボルグ" in text and text.endswith("\n")
+    assert "騎士" in text and text.endswith("\n")
     assert repo / "characters/c1/params.json" in paths
 
 

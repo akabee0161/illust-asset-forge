@@ -1,4 +1,4 @@
-name: ボルグ
+name: 騎士
 subject: [1boy, solo, adult]
 appearance: [mature male, muscular, broad shoulders, square jaw, short hair, dark reddish brown hair, slicked back hair, stubble, brown eyes, thick eyebrows]
 outfit: [dark grey armor, gold trim, steel shoulder armor, breastplate, gauntlets]
@@ -8,4 +8,3 @@ expressions:
   normal: [serious, closed mouth]
   hurt: [pain, clenched teeth, one eye closed, sweat]
   shout: [shouting, open mouth, v-shaped eyebrows]
-inpaint_box: [440, 170, 820, 600]

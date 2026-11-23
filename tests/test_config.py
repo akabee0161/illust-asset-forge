@@ -11,7 +11,7 @@ from artgen.config import (
 )
 
 CHARACTER_YAML = """\
-name: ボルグ
+name: 騎士
 style: color-anime
 subject: [1boy, solo]
 appearance: [brown hair]
@@ -46,7 +46,7 @@ def test_load_character_reads_all_fields(tmp_path):
     write_character(tmp_path)
     c = load_character(tmp_path, "c1")
     assert c.id == "c1"
-    assert c.name == "ボルグ"
+    assert c.name == "騎士"
     assert c.style == "color-anime"
     assert c.subject == ["1boy", "solo"]
     assert c.appearance == ["brown hair"]
@@ -129,7 +129,7 @@ def test_inpaint_box_shape(tmp_path, box):
 
 
 def test_missing_required_key(tmp_path):
-    write_character(tmp_path, CHARACTER_YAML.replace("name: ボルグ\n", ""))
+    write_character(tmp_path, CHARACTER_YAML.replace("name: 騎士\n", ""))
     with pytest.raises(ConfigError) as e:
         load_character(tmp_path, "c1")
     assert "characters/c1/character.yaml: name: " in str(e.value)
