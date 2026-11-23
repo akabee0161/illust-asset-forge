@@ -131,5 +131,26 @@ def test_prepare_cell_refuses_other_repo_clone():
 def test_prepare_cell_uses_forge_root_everywhere():
     src = code_cells()[1][0]
     assert "os.chdir(ROOT)" in src
-    assert "{ROOT}/requirements-colab.txt" in src and "-e {ROOT}" in src
+    assert "{ROOT}/requirements-colab.txt" in src and "{ROOT}" in src
     assert 'os.path.join(ROOT, "src")' in src
+
+
+def test_prepare_cell_quotes_root_in_shell_commands():
+    # SUBDIR に空白があっても、パスが 1 つの引数として pip に渡る
+    src = code_cells()[1][0]
+    assert '-r "{ROOT}/requirements-colab.txt"' in src
+    assert '-e "{ROOT}"' in src
+
+
+def test_prepare_cell_moves_current_src_to_front_of_sys_path():
+    import os
+    import types
+
+    src = code_cells()[1][0]
+    text = "\n".join(ln for ln in src.splitlines() if not ln.lstrip().startswith(("!", "%")))
+    nodes = [n for n in ast.parse(text).body if "SRC" in ast.get_source_segment(text, n)]
+    assert nodes
+    # 同じカーネルで ROOT を A → B → A と変えた後でも、A の src が先頭になる
+    fake_sys = types.SimpleNamespace(path=["/b/src", "/a/src", "/other"])
+    exec("\n".join(ast.get_source_segment(text, n) for n in nodes), {"os": os, "sys": fake_sys, "ROOT": "/a"})
+    assert fake_sys.path == ["/a/src", "/b/src", "/other"]

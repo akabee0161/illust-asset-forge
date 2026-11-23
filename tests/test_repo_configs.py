@@ -90,7 +90,10 @@ def test_no_game_ids_or_trial_style_names():
     assert not [s for s in styles if s.startswith("tlf-")]
 
 
-@pytest.mark.parametrize("char_id", CHARACTER_IDS)
+SAMPLE_IDS = ["knight", "mage", "schoolboy", "schoolgirl"]
+
+
+@pytest.mark.parametrize("char_id", SAMPLE_IDS)  # 見本だけ。コピーした先で足す作品のキャラクターには当てはめない
 def test_samples_have_no_style_or_inpaint_box(char_id):
     data = yaml.safe_load((ROOT / "characters" / char_id / "character.yaml").read_text(encoding="utf-8"))
     assert "style" not in data and "inpaint_box" not in data

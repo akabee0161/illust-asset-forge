@@ -54,7 +54,7 @@ GPU を使う処理は依頼者が Colab で動かし、GPU を使わない処�
      - `REPO_BRANCH`: 取るブランチ（既定は `main`）。作業ブランチの絵を試すときは、これを書き換えて準備のセルを実行し直す
      - `SUBDIR`: リポジトリの中の forge のフォルダ（既定は空 = リポジトリの根）
      - `DRIVE_DIR`: 候補・採用した絵を置く Drive の場所（既定は `/content/drive/MyDrive/illust-asset-forge`）
-   - **モデルの読み込み**: `pipe` が無いときだけ `F.load_pipeline()` で読み込む（数分）。メモリ不足で止まったときだけ `F.load_pipeline(low_memory=True)` にする（遅くなる）。続けて `forge = F.attach(pipe, ".")` で、読み込み済みのパイプラインに設定を結びつける
+   - **モデルの読み込み**: `pipe` が無いときだけ `F.load_pipeline()` で読み込む（数分）。メモリ不足で止まったときだけ `F.load_pipeline(low_memory=True)` にする（遅くなる）。続けて `forge = F.attach(pipe, ".", base_dir=DRIVE_DIR)` で、読み込み済みのパイプラインに設定を結びつける
    - **画風の見比べ（任意）**: `forge.compare_styles(CHAR, n=2)` が、同じシードで画風だけを変えた顔を作り、`P.show_styles(paths)` で画風ごとに並べる。気に入った画風名を後ろの `STYLE` に書く
      - **その場で画風を書く**: YAML を書いて push しなくても、`style=` と `compare_styles(styles=[...])` の要素に `{"name": "my-style", "prompt": ["flat color"], "negative": ["gradient"]}` のような辞書を渡せる（`name` は半角英数字・`_`・`-` だけ。画風名と混ぜてよい。同じ名前の `styles/<name>.yaml` があっても、その場の定義が優先する）。定義は PNG の条件の `overrides.style_definition` に残り、顔を採用すれば表情・全身にも引き継がれる。気に入ったら zip（または辞書）を Claude に渡すと、`styles/<name>.yaml` にしてもらえる
    - **顔**: `forge.generate(CHARS, "face", n=4, style=STYLE, on_image=F.show_one)`。`CHARS` に並べたキャラクターをまとめて作り、1 枚できるたびに表示される。調整中は `n=2` など少なくし、気に入らなければ ■ で止めて作り直す（止めても、できた分は Drive に残る）。一気に作るときは `n=16` などにして、後から `P.pick(forge, char="knight", kind="face")`（そのキャラクター・種類の最新の候補。中断・切断の後も同じ。日時を決めるときは `run_id=` を足し、`P.pick(forge, run_id=None)` なら最新の日時の全部。古い `runs/<日時>/` のフォルダは `P.pick(forge, run_id="<日時>")` だけで開く。`char`・`kind` は書かない）で候補を開き直す。`P.pick(forge, paths)` の画面で、採用する顔のボタンを押す
@@ -133,7 +133,8 @@ uv venv .venv && uv pip install -e '.[dev]' && .venv/bin/pytest
    - `SUBDIR`: コピーを置いたフォルダ（例: `illust-asset-forge`）
    - `DRIVE_DIR`: **作品ごとに分ける**。同じ場所を使うと、別の作品の候補や採用した絵が混ざる
 2. `tests/test_notebook.py` の既定値のテストを、書き換えた値に合わせる
-3. 画風・テンプレート・道具を直したときは、コピー元へ戻す候補として控えておく。コピー元の改善は、必要なときに手で持ってくる（自動では届かない）
+3. コピー先のリポジトリ名・フォルダ名が禁止語（`tests/test_repo_configs.py` の `forbidden`）を含むときは、`test_repo_does_not_mention_the_game` が落ちる。このテストは `tests/` の外のファイル（ノートブックの `REPO_URL` など）を調べるので、手順 2 のテストを直しても解消しない。`forbidden` の一覧から外すか、禁止語を含まない名前にする（どちらにするかはコピーする側が決める）
+4. 画風・テンプレート・道具を直したときは、コピー元へ戻す候補として控えておく。コピー元の改善は、必要なときに手で持ってくる（自動では届かない）
 
 ## 9. 見本の 4 人
 
@@ -152,8 +153,9 @@ uv venv .venv && uv pip install -e '.[dev]' && .venv/bin/pytest
 
 1. 準備のセルの `REPO_BRANCH` を、絵を作るブランチにして実行する
 2. 騎士・魔法使い（シードを固定して、同じ絵に近づける）:
-   - `paths = forge.generate(["knight"], "face", seeds=[3034254740])`、`forge.generate(["knight"], "fullbody", seeds=[3034254740])`
-   - `paths = forge.generate(["mage"], "face", seeds=[3034254740])`、`forge.generate(["mage"], "fullbody", seeds=[4074111561])`
-   - それぞれ `P.pick(forge, paths)` で採用する。顔は右向きに出るはずなので「左右反転して採用」を押す
+   - 騎士の顔: `paths = forge.generate(["knight"], "face", seeds=[3034254740])` のあと `P.pick(forge, paths)` で採用する。顔は右向きに出るはずなので「左右反転して採用」を押す
+   - 騎士の全身: `paths = forge.generate(["knight"], "fullbody", seeds=[3034254740])` のあと `P.pick(forge, paths)` で採用する（`paths` は全身の結果に入れ直す）
+   - 魔法使いの顔: `paths = forge.generate(["mage"], "face", seeds=[3034254740])` のあと `P.pick(forge, paths)`（反転して採用）
+   - 魔法使いの全身: `paths = forge.generate(["mage"], "fullbody", seeds=[4074111561])` のあと `P.pick(forge, paths)`
 3. 男子生徒・女子生徒: 顔の候補を作り（`n=4` など）、選んで採用する（右向きなら反転する）。続けて全身の候補を作り、選んで採用する
 4. 表情は作らない。採用した絵は Drive の `DRIVE_DIR/selected/<id>/` に入る
