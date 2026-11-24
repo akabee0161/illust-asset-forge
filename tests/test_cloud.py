@@ -232,3 +232,44 @@ def test_install_without_new_adoption_stops(cli_env, capsys):
 def test_install_rejects_path_like_character(cli_env, capsys):
     assert cloud.main(["install", "../c1"]) == 1
     assert capsys.readouterr().out.startswith("止まった:")
+
+
+def _installed(cli_env):
+    return json.loads((cli_env / "local/installed/c1.json").read_text(encoding="utf-8"))
+
+
+def test_install_records_the_hash_of_the_bytes_it_installed(cli_env, monkeypatch):
+    # 写す直前に別の adopt が local/selected の絵を置き換えても、記録は実際に取り込んだ絵の SHA-256 になる
+    from artgen.selection import file_sha256
+
+    forge_ = make_forge(cli_env)
+    forge_.selected.adopt(forge_.generate("c1", "face", seeds=[5])[0])
+    newer = forge_.generate("c1", "face", seeds=[6])[0]
+    paint_left_half_red(newer)
+    real_copy2 = cloud.shutil.copy2
+
+    def copy_after_replacement(src, dst, *a, **kw):
+        if "selected" in str(src):
+            real_copy2(newer, src)  # 写す前に置き換わった
+        return real_copy2(src, dst, *a, **kw)
+
+    monkeypatch.setattr(cloud.shutil, "copy2", copy_after_replacement)
+    assert cloud.main(["install", "c1"]) == 0
+    assert _installed(cli_env)["face.png"] == file_sha256(cli_env / "characters/c1/source/face.png")
+
+
+def test_install_keeps_the_previous_record_when_writing_fails(cli_env, monkeypatch, capsys):
+    forge_ = make_forge(cli_env)
+    forge_.selected.adopt(forge_.generate("c1", "face", seeds=[5])[0])
+    assert cloud.main(["install", "c1"]) == 0
+    before = _installed(cli_env)
+    forge_.selected.adopt(forge_.generate("c1", "fullbody", seeds=[10])[0])
+
+    def broken_replace(src, dst):
+        raise OSError(28, "No space left on device")
+
+    monkeypatch.setattr(cloud.os, "replace", broken_replace)
+    assert cloud.main(["install", "c1"]) == 1
+    assert capsys.readouterr().out.count("止まった:") == 1
+    assert _installed(cli_env) == before  # 前の完全な記録が残る
+    assert sorted(p.name for p in (cli_env / "local/installed").iterdir()) == ["c1.json"]  # 一時ファイルも残らない

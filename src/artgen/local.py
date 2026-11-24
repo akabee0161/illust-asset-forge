@@ -73,8 +73,11 @@ def save_outputs(runs_dir: Path, outputs: list[tuple[str, bytes]]) -> list[Path]
             with path.open("xb") as f:
                 written.append(path)
                 f.write(data)
-    except FileExistsError as e:
-        for p in written:  # 開けなかった（別の実行の）パスは written に入っていない
+    except OSError as e:
+        # この実行で作ったファイル（書きかけを含む）だけを消す。開けなかった（別の実行の）パスは written に入っていない
+        for p in written:
             p.unlink(missing_ok=True)
-        raise ConfigError(f"outputs: 同じ名前の絵を別の実行が先に書いた（置き換えない）: {path}") from e
+        if isinstance(e, FileExistsError):
+            raise ConfigError(f"outputs: 同じ名前の絵を別の実行が先に書いた（置き換えない）: {path}") from e
+        raise
     return [p for p, _ in targets]

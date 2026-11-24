@@ -73,3 +73,32 @@ def test_save_outputs_does_not_replace_existing_images(tmp_path):
         save_outputs(tmp_path, [("c1/face/r/c1_face_2.png", b"2"), ("c1/face/r/c1_face_1.png", b"new")])
     assert existing.read_bytes() == b"old"
     assert not (tmp_path / "c1/face/r/c1_face_2.png").exists()  # 1 つでも既にあれば何も書かない
+
+
+def test_save_outputs_removes_its_files_when_a_write_fails(tmp_path, monkeypatch):
+    # 2 枚目の書き込みが容量不足などで失敗したら、1 枚目と書きかけの 2 枚目を残さない（再試行が既存の検査で止まらない）
+    from pathlib import Path
+
+    real_open = Path.open
+
+    def failing_open(self, mode="r", *args, **kwargs):
+        f = real_open(self, mode, *args, **kwargs)
+        if self.name == "b.png":
+            class Broken:
+                def __enter__(self_inner):
+                    return self_inner
+
+                def __exit__(self_inner, *exc):
+                    f.close()
+
+                def write(self_inner, data):
+                    f.write(data[:1])
+                    raise OSError(28, "No space left on device")
+            return Broken()
+        return f
+
+    monkeypatch.setattr(Path, "open", failing_open)
+    with pytest.raises(OSError, match="No space"):
+        save_outputs(tmp_path / "runs", [("c1/a.png", b"1"), ("c1/b.png", b"22")])
+    assert not (tmp_path / "runs/c1/a.png").exists()
+    assert not (tmp_path / "runs/c1/b.png").exists()

@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import shutil
 import tempfile
 from dataclasses import asdict
@@ -109,16 +110,21 @@ def cmd_install(args: argparse.Namespace) -> None:
             previous = _read_installed(_installed_record(dirs, char))
             # 退避したフォルダ（replaced/）や一時ファイルは持ち込まない。前回の取り込みの後に採用し直した絵だけを入れる
             # （前回入れたままの絵を入れると、その後に Colab の道などで直した source/ を古い採用に戻してしまう）
-            adopted = {
-                f.name: (f, file_sha256(f))
-                for f in sorted(src.iterdir()) if f.is_file() and not f.name.startswith(".")
-            }
-            fresh = {name: f for name, (f, sha) in adopted.items() if previous.get(name) != sha}
+            # 先に写しを取り、写しの SHA-256 で判定・記録する（写す前後に別の adopt が置き換えても、記録と取り込んだ絵が食い違わない）
+            (staged / char).mkdir(parents=True)
+            fresh: dict[str, str] = {}
+            for f in sorted(src.iterdir()):
+                if not f.is_file() or f.name.startswith("."):
+                    continue
+                copy = staged / char / f.name
+                shutil.copy2(f, copy)
+                sha = file_sha256(copy)
+                if previous.get(f.name) == sha:
+                    copy.unlink()
+                else:
+                    fresh[f.name] = sha
             if not fresh:
                 raise ConfigError(f"{char}: 前回の取り込みの後に採用し直した絵が無い（{src}）")
-            (staged / char).mkdir(parents=True)
-            for name, f in fresh.items():
-                shutil.copy2(f, staged / char / name)
             # 取り込みは source/ を丸ごと置き換える。採用し直していない絵（顔・全身・表情）は今の source/ から持ち越す。
             # ただし顔を採用し直したときは、表情（face_*.png）を持ち越さない（古い顔から作ったので検査で落ちる）
             # 今の設定に無い名前（expressions から消した表情など）は持ち越さず、取り込みの「消した」に出す
@@ -131,13 +137,20 @@ def cmd_install(args: argparse.Namespace) -> None:
                     if "face.png" in fresh and kept.name.startswith("face_"):
                         continue
                     shutil.copy2(kept, staged / char / kept.name)
-            records[char] = {**previous, **{name: adopted[name][1] for name in fresh}}
+            records[char] = {**previous, **fresh}
         reports = install_selection(root, staged)
     dirs.installed.mkdir(parents=True, exist_ok=True)
     for char, record in records.items():
-        _installed_record(dirs, char).write_text(
-            json.dumps(record, ensure_ascii=False, indent=2, sort_keys=True) + "\n", encoding="utf-8",
-        )
+        # 一時ファイルに書き終えてから置き換える（途中で失敗しても、前の完全な記録が残る）
+        path = _installed_record(dirs, char)
+        tmp_path = path.with_name(f".{path.name}.tmp")
+        try:
+            tmp_path.write_text(
+                json.dumps(record, ensure_ascii=False, indent=2, sort_keys=True) + "\n", encoding="utf-8",
+            )
+            os.replace(tmp_path, path)
+        finally:
+            tmp_path.unlink(missing_ok=True)
     print_reports(reports)
 
 
