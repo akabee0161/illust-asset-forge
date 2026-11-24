@@ -187,7 +187,10 @@ _HEX_COLOR_RE = re.compile(r"#[0-9A-Fa-f]{6}")
 
 
 def load_preview_background(root: Path) -> str | None:
-    """候補・確認のページで背景を消した絵を置く色（defaults.yaml の preview_background）。無ければ None。"""
+    """候補・確認のページで背景を消した絵を置く色（defaults.yaml の preview_background）。
+    defaults.yaml が無いか、キーが無ければ None。"""
+    if not (root / "defaults.yaml").is_file():
+        return None
     r = _Reader(root, "defaults.yaml")
     value = r.data.get("preview_background")
     if value is None:

@@ -363,3 +363,7 @@ def test_preview_background_is_optional(repo):
     write(repo, "defaults.yaml", "style: color-anime\npreview_background: red\n")
     with pytest.raises(ConfigError, match=re.escape("defaults.yaml: preview_background")):
         load_preview_background(repo)
+
+
+def test_preview_background_is_none_without_defaults_file(tmp_path):
+    assert load_preview_background(tmp_path) is None
