@@ -47,14 +47,14 @@ def new_round(rounds_dir: Path, run_id: str, paths: list[Path]) -> Path:
             raise ConfigError(f"{path}: {local} の外にある絵は回りに入れられない") from e
         entries.append({"number": number, "path": rel})
     out = rounds_dir / f"{run_id}.json"
-    if out.exists():
-        # 上書きすると、先の回りの番号と絵の対応が失われ、その番号で別の絵を採用してしまう
-        raise ConfigError(f"{out.name}: 同じ名前の回りの記録が既にある（{run_id}）。上書きしない")
     rounds_dir.mkdir(parents=True, exist_ok=True)
-    out.write_text(
-        json.dumps({"run_id": run_id, "candidates": entries}, ensure_ascii=False, indent=2) + "\n",
-        encoding="utf-8",
-    )
+    try:
+        # 新しく作るときだけ書く（調べてから書くと、その間に別の実行が同じ名前で書いたものを上書きする）
+        with out.open("x", encoding="utf-8") as f:
+            f.write(json.dumps({"run_id": run_id, "candidates": entries}, ensure_ascii=False, indent=2) + "\n")
+    except FileExistsError as e:
+        # 上書きすると、先の回りの番号と絵の対応が失われ、その番号で別の絵を採用してしまう
+        raise ConfigError(f"{out.name}: 同じ名前の回りの記録が既にある（{run_id}）。上書きしない") from e
     return out
 
 

@@ -113,3 +113,13 @@ def test_load_jobs_seeds_must_be_a_list(repo, tmp_path, seeds):
     entry = {"char": "c1", "template": "face", "seeds": seeds}
     with pytest.raises(ConfigError, match=re.escape("[0].seeds")):
         load_jobs(write_jobs(tmp_path, [entry]), repo)
+
+
+@pytest.mark.parametrize("entry, where", [
+    ({"char": "c1/../c1", "template": "face", "n": 1}, "[0].char"),
+    ({"char": "c1", "template": "../templates/face", "n": 1}, "[0].template"),
+])
+def test_load_jobs_rejects_path_like_names_before_modal(repo, tmp_path, entry, where):
+    # 設定はパスとしては読めても、Modal の上の保存先の名前で止まる。起動の前に止める
+    with pytest.raises(ConfigError, match=re.escape(where)):
+        load_jobs(write_jobs(tmp_path, [entry]), repo)

@@ -1,6 +1,7 @@
 import json
 import sys
 import types
+from pathlib import Path
 
 import pytest
 
@@ -80,9 +81,10 @@ def test_page_rebuilds_html(cli_env, round_json, capsys):
     assert (cli_env / "local/rounds/20261123_120000.html").is_file()
 
 
-def fake_modal(monkeypatch, outputs):
+def fake_modal(monkeypatch, outputs, forge_dir=None):
     calls = []
     module = types.ModuleType("artgen.modal_app")
+    module.FORGE_DIR = forge_dir if forge_dir is not None else Path.cwd()  # 既定は --root と同じフォルダ
 
     def run(jobs, commit, faces):
         calls.append((jobs, commit, faces))
@@ -149,3 +151,84 @@ def test_install_replaces_fullbody_when_reselected(cli_env):
     old_bytes = old.read_bytes()
     assert cloud.main(["install", "c1"]) == 0
     assert old.read_bytes() != old_bytes
+
+
+def test_generate_refuses_root_other_than_the_folder_sent_to_modal(cli_env, monkeypatch, capsys, tmp_path):
+    calls = fake_modal(monkeypatch, [], forge_dir=tmp_path / "elsewhere")
+    jobs = cli_env / "jobs.json"
+    jobs.write_text(json.dumps([{"char": "c1", "template": "face", "n": 1}]), encoding="utf-8")
+    assert cloud.main(["generate", "--jobs", str(jobs)]) == 1
+    out = capsys.readouterr().out
+    assert out.startswith("止まった:") and "--root" in out
+    assert calls == []
+
+
+def test_install_does_not_bring_back_a_fullbody_installed_before(cli_env):
+    # Modal で全身 A を取り込み、その後 Colab の道で source の全身を B にした。顔だけ選び直しても B のまま
+    forge_ = make_forge(cli_env)
+    forge_.selected.adopt(forge_.generate("c1", "face", seeds=[5])[0])
+    forge_.selected.adopt(forge_.generate("c1", "fullbody", seeds=[10])[0])
+    assert cloud.main(["install", "c1"]) == 0
+    colab_fullbody = _write_source_fullbody(cli_env)
+    b = colab_fullbody.read_bytes()
+    forge_.selected.adopt(forge_.generate("c1", "face", seeds=[6])[0])
+    assert cloud.main(["install", "c1"]) == 0
+    assert colab_fullbody.read_bytes() == b
+
+
+def test_install_fullbody_only_keeps_the_existing_face(cli_env, capsys):
+    forge_ = make_forge(cli_env)
+    face = forge_.generate("c1", "face", seeds=[5])[0]
+    dest = cli_env / "characters/c1/source/face.png"
+    dest.parent.mkdir(parents=True)
+    dest.write_bytes(face.read_bytes())
+    forge_.selected.adopt(forge_.generate("c1", "fullbody", seeds=[10])[0])
+    assert cloud.main(["install", "c1"]) == 0
+    assert dest.read_bytes() == face.read_bytes()
+    assert (cli_env / "characters/c1/source/fullbody.png").is_file()
+    assert "消した" not in capsys.readouterr().out
+
+
+def _write_source_expression(cli_env, name="face_hurt.png"):
+    from PIL import Image
+
+    from artgen.pnginfo import save_png
+
+    path = cli_env / "characters/c1/source" / name
+    save_png(Image.new("RGB", (8, 8)), path, {"character": "c1", "template": "face", "expression": "hurt"})
+    return path
+
+
+def test_install_keeps_expressions_when_the_face_was_not_reselected(cli_env):
+    forge_ = make_forge(cli_env)
+    forge_.selected.adopt(forge_.generate("c1", "face", seeds=[5])[0])
+    assert cloud.main(["install", "c1"]) == 0
+    hurt = _write_source_expression(cli_env)
+    forge_.selected.adopt(forge_.generate("c1", "fullbody", seeds=[10])[0])
+    assert cloud.main(["install", "c1"]) == 0
+    assert hurt.is_file()
+
+
+def test_install_drops_expressions_when_the_face_was_reselected(cli_env, capsys):
+    forge_ = make_forge(cli_env)
+    forge_.selected.adopt(forge_.generate("c1", "face", seeds=[5])[0])
+    assert cloud.main(["install", "c1"]) == 0
+    hurt = _write_source_expression(cli_env)
+    forge_.selected.adopt(forge_.generate("c1", "face", seeds=[6])[0])
+    assert cloud.main(["install", "c1"]) == 0
+    assert not hurt.exists()
+    assert "face_hurt.png" in capsys.readouterr().out  # 「消した」に出る
+
+
+def test_install_without_new_adoption_stops(cli_env, capsys):
+    forge_ = make_forge(cli_env)
+    forge_.selected.adopt(forge_.generate("c1", "face", seeds=[5])[0])
+    assert cloud.main(["install", "c1"]) == 0
+    capsys.readouterr()
+    assert cloud.main(["install", "c1"]) == 1
+    assert capsys.readouterr().out.startswith("止まった:")
+
+
+def test_install_rejects_path_like_character(cli_env, capsys):
+    assert cloud.main(["install", "../c1"]) == 1
+    assert capsys.readouterr().out.startswith("止まった:")

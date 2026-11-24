@@ -191,9 +191,11 @@ uv venv .venv && uv pip install -e '.[dev]' && .venv/bin/pytest
 2. `.venv/bin/python -m artgen.cloud generate --jobs local/jobs/<ファイル>.json` — Modal で作り、`local/runs/` に置き、回りの記録（`local/rounds/<日時>.json`）と候補のページ（同名の `.html`）を作る
 3. 候補のページを Artifact で依頼者に見せる。番号で答えてもらう
 4. `.venv/bin/python -m artgen.cloud adopt local/rounds/<日時>.json <番号> [--flip]` で採用する（`--flip` は顔だけ左右反転する）。ページを作り直すときは `page <回りの記録>`
-5. `.venv/bin/python -m artgen.cloud install <id> [<id> ...]` で `characters/<id>/source/` に取り込む。`source/` は丸ごと置き換わるが、`local/selected/<id>/` に選び直した全身絵が無いときは、今の `source/fullbody.png` を持ち越す（Colab の道で採った全身絵を消さないため）。表情（`face_*.png`）は持ち越さない（顔が変わると検査で落ちる）。出力に書き戻しの一覧と次のコマンドが出る。以降（書き戻し・`python -m artgen.export <id>`）は [4 の流れ](#4-claude-側の流れ)の 2 から同じ
+5. `.venv/bin/python -m artgen.cloud install <id> [<id> ...]` で `characters/<id>/source/` に取り込む。入れるのは、前回の `install` の後に採用し直した絵だけ（前回入れた絵は `local/installed/<id>.json` に記録する）。採用し直していない絵（顔・全身・表情）は、今の `source/` から持ち越す（Colab の道で直した絵を、古い採用に戻さないため）。ただし顔を採用し直したときは、表情（`face_*.png`）を持ち越さない（古い顔から作ったので検査で落ちる）。今の設定に無い名前（`expressions` から消した表情など）も持ち越さない。採用し直した絵が無ければ止まる。出力に書き戻しの一覧と次のコマンドが出る。以降（書き戻し・`python -m artgen.export <id>`）は [4 の流れ](#4-claude-側の流れ)の 2 から同じ
 
-`--root` は `cloud` の直後に置く（`cloud --root DIR adopt …`）。
+`--root` は `cloud` の直後に置く（`cloud --root DIR adopt …`）。`generate` だけは、Modal に送るフォルダ（`artgen` を入れたフォルダ）と違うフォルダを `--root` で指すと止まる。別のフォルダで作るときは、そのフォルダの `.venv` で実行する。
+
+候補（`local/runs/`）と回りの記録（`local/rounds/`）は、同じ名前のものが既にあれば置き換えずに止まる。
 
 ### `local/` の中身（リポジトリに入れない）
 
@@ -203,6 +205,7 @@ uv venv .venv && uv pip install -e '.[dev]' && .venv/bin/pytest
 | `local/selected/<id>/` | 採用した絵（`face.png`・`fullbody.png`）。顔を採り直すと、古いものは `replaced/<日時>/` へ退く |
 | `local/packs/` | 採用の置き場が使う zip の置き場（Modal の道では使わない） |
 | `local/rounds/` | 回りの記録（`.json`）と候補のページ（`.html`） |
+| `local/installed/<id>.json` | 前回の `install` で `local/selected/<id>/` から入れた絵の名前と SHA-256 |
 | `local/jobs/` | ジョブのファイル |
 
 ### 候補は全部見て選ぶ

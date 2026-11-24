@@ -12,6 +12,7 @@ from pathlib import Path
 from artgen.config import ConfigError, load_character, load_template
 from artgen.forge import Forge
 from artgen.prompt import Overrides
+from artgen.selection import _check_name_part
 
 REQUIRED_GPU = "Tesla T4"
 
@@ -62,6 +63,12 @@ def load_jobs(path: Path, root: Path) -> list[GenerateJob]:
                 raise fail(key, "必須のキーが無い")
         if (entry.get("n") is None) == (entry.get("seeds") is None):
             raise fail("n", "n と seeds のちょうど一方を書く")
+        for key in ("char", "template"):
+            # 設定は `knight/../knight` のようなパスでも読めるが、Modal の上の保存先の名前で止まる。起動の前に止める
+            try:
+                _check_name_part(entry[key], key)
+            except ConfigError as e:
+                raise fail(key, f"名前に使えない値: {entry[key]!r}") from e
         try:
             load_character(root, entry["char"])
         except ConfigError as e:

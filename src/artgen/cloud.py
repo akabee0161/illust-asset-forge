@@ -12,20 +12,22 @@ Modal は `generate` の中でだけ import する（ほかのコマンドとテ
 from __future__ import annotations
 
 import argparse
+import json
 import shutil
 import tempfile
 from dataclasses import asdict
 from datetime import datetime
 from pathlib import Path
 
-from artgen.config import ConfigError
+from artgen.config import ConfigError, load_character
+from artgen.export import _accepted_names
 from artgen.intake import install_selection, print_reports
 from artgen.jobs import collect_faces, load_jobs
 from artgen.local import local_commit, local_dirs, save_outputs
 from artgen.pnginfo import MissingParamsError
 from artgen.review_page import build_page
 from artgen.rounds import new_round, read_round, unused_run_id
-from artgen.selection import SelectionStore
+from artgen.selection import SelectionStore, _check_name_part, file_sha256
 
 _STOPS = (ConfigError, MissingParamsError, OSError, RuntimeError)
 
@@ -41,6 +43,13 @@ def cmd_generate(args: argparse.Namespace) -> None:
     faces = collect_faces(dirs.selected, jobs)
     from artgen import modal_app  # Modal はここでだけ import する
 
+    if root != Path(modal_app.FORGE_DIR).resolve():
+        # Modal に送る設定は、このパッケージのフォルダ（FORGE_DIR）から取る。別のフォルダの設定・commit と
+        # 食い違う絵ができるので、generate では --root で別のフォルダを指せない
+        raise ConfigError(
+            f"--root: generate は、Modal に送るフォルダ（{modal_app.FORGE_DIR}）でしか使えない。"
+            f"そのフォルダの .venv で実行する（指したのは {root}）"
+        )
     outputs = modal_app.run(jobs, local_commit(root), faces)
     paths = save_outputs(dirs.runs, outputs)
     run_id = unused_run_id(dirs.rounds, datetime.now().strftime("%Y%m%d_%H%M%S"))
@@ -69,25 +78,66 @@ def cmd_adopt(args: argparse.Namespace) -> None:
     print(f"採用した: {dest}")
 
 
+def _installed_record(dirs, char: str) -> Path:
+    return dirs.installed / f"{char}.json"
+
+
+def _read_installed(path: Path) -> dict[str, str]:
+    """前回の取り込みで `local/selected/<id>/` から入れた絵の名前と SHA-256。無ければ空。"""
+    if not path.is_file():
+        return {}
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as e:
+        raise ConfigError(f"{path.name}: 取り込みの記録として読めない: {e}") from e
+    if not isinstance(data, dict) or not all(isinstance(k, str) and isinstance(v, str) for k, v in data.items()):
+        raise ConfigError(f"{path.name}: 取り込みの記録として読めない（名前と SHA-256 の組でない）")
+    return data
+
+
 def cmd_install(args: argparse.Namespace) -> None:
     root = args.root.resolve()
     dirs = local_dirs(root)
+    records: dict[str, dict[str, str]] = {}
     with tempfile.TemporaryDirectory() as tmp:
         staged = Path(tmp) / "selected"
         for char in args.chars:
+            _check_name_part(char, "character")
             src = dirs.selected / char
             if not src.is_dir():
                 raise ConfigError(f"{char}: 採用した絵が無い（{src}）")
+            previous = _read_installed(_installed_record(dirs, char))
+            # 退避したフォルダ（replaced/）や一時ファイルは持ち込まない。前回の取り込みの後に採用し直した絵だけを入れる
+            # （前回入れたままの絵を入れると、その後に Colab の道などで直した source/ を古い採用に戻してしまう）
+            adopted = {
+                f.name: (f, file_sha256(f))
+                for f in sorted(src.iterdir()) if f.is_file() and not f.name.startswith(".")
+            }
+            fresh = {name: f for name, (f, sha) in adopted.items() if previous.get(name) != sha}
+            if not fresh:
+                raise ConfigError(f"{char}: 前回の取り込みの後に採用し直した絵が無い（{src}）")
             (staged / char).mkdir(parents=True)
-            for f in src.iterdir():  # 退避したフォルダ（replaced/）や一時ファイルは持ち込まない
-                if f.is_file() and not f.name.startswith("."):
-                    shutil.copy2(f, staged / char / f.name)
-            # 取り込みは source/ を丸ごと置き換える。選び直していない全身絵（Colab の道で採った絵など）を
-            # 消さないよう持ち越す。表情（face_*.png）は、顔が変わると検査で落ちるので持ち越さない
-            kept = root / "characters" / char / "source" / "fullbody.png"
-            if kept.is_file() and not (staged / char / "fullbody.png").exists():
-                shutil.copy2(kept, staged / char / "fullbody.png")
+            for name, f in fresh.items():
+                shutil.copy2(f, staged / char / name)
+            # 取り込みは source/ を丸ごと置き換える。採用し直していない絵（顔・全身・表情）は今の source/ から持ち越す。
+            # ただし顔を採用し直したときは、表情（face_*.png）を持ち越さない（古い顔から作ったので検査で落ちる）
+            # 今の設定に無い名前（expressions から消した表情など）は持ち越さず、取り込みの「消した」に出す
+            accepted = set(_accepted_names(list(load_character(root, char).expressions)))
+            source_dir = root / "characters" / char / "source"
+            if source_dir.is_dir():
+                for kept in sorted(source_dir.iterdir()):
+                    if not kept.is_file() or kept.name in fresh or kept.name not in accepted:
+                        continue
+                    if "face.png" in fresh and kept.name.startswith("face_"):
+                        continue
+                    shutil.copy2(kept, staged / char / kept.name)
+            records[char] = {**previous, **{name: adopted[name][1] for name in fresh}}
         reports = install_selection(root, staged)
+    dirs.installed.mkdir(parents=True, exist_ok=True)
+    for char, record in records.items():
+        _installed_record(dirs, char).write_text(
+            json.dumps(record, ensure_ascii=False, indent=2, sort_keys=True) + "\n", encoding="utf-8",
+        )
     print_reports(reports)
 
 

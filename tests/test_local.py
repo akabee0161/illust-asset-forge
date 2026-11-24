@@ -63,3 +63,13 @@ def test_save_outputs_rejects_escape(tmp_path, bad):
     with pytest.raises(ConfigError):
         save_outputs(tmp_path / "runs", [("ok/a.png", b"1"), (bad, b"2")])
     assert not (tmp_path / "runs").exists()  # 1 つでも悪ければ何も書かない
+
+
+def test_save_outputs_does_not_replace_existing_images(tmp_path):
+    existing = tmp_path / "c1/face/r/c1_face_1.png"
+    existing.parent.mkdir(parents=True)
+    existing.write_bytes(b"old")
+    with pytest.raises(ConfigError, match="既にある"):
+        save_outputs(tmp_path, [("c1/face/r/c1_face_2.png", b"2"), ("c1/face/r/c1_face_1.png", b"new")])
+    assert existing.read_bytes() == b"old"
+    assert not (tmp_path / "c1/face/r/c1_face_2.png").exists()  # 1 つでも既にあれば何も書かない

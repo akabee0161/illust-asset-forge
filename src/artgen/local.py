@@ -20,6 +20,7 @@ class LocalDirs:
     selected: Path
     packs: Path
     rounds: Path
+    installed: Path
 
 
 def local_dirs(root: Path) -> LocalDirs:
@@ -27,6 +28,7 @@ def local_dirs(root: Path) -> LocalDirs:
     base = Path(root) / LOCAL_DIR
     return LocalDirs(
         runs=base / "runs", selected=base / "selected", packs=base / "packs", rounds=base / "rounds",
+        installed=base / "installed",
     )
 
 
@@ -49,7 +51,11 @@ def local_commit(root: Path) -> str:
 
 
 def save_outputs(runs_dir: Path, outputs: list[tuple[str, bytes]]) -> list[Path]:
-    """outputs（runs/ からの相対パスとバイト）を書く。1 つでも悪いパスがあれば何も書かずに ConfigError。"""
+    """outputs（runs/ からの相対パスとバイト）を書く。既にある絵は置き換えない。
+
+    1 つでも悪いパス・既にあるパスがあれば何も書かずに ConfigError。調べた後に別の実行が同じパスを
+    書いたときも置き換えず ConfigError で止める（そのときは、この実行で書いた分だけを消す）。
+    """
     runs_dir = Path(runs_dir)
     targets: list[tuple[Path, bytes]] = []
     for rel, data in outputs:
@@ -57,7 +63,18 @@ def save_outputs(runs_dir: Path, outputs: list[tuple[str, bytes]]) -> list[Path]
         if posix.is_absolute() or ".." in posix.parts or not posix.parts:
             raise ConfigError(f"outputs: runs/ の外を指すパス: {rel!r}")
         targets.append((runs_dir.joinpath(*posix.parts), data))
-    for path, data in targets:
-        path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_bytes(data)
+    existing = [p for p, _ in targets if p.exists()]
+    if existing:
+        raise ConfigError(f"outputs: 同じ名前の絵が既にある（置き換えない）: {', '.join(map(str, existing))}")
+    written: list[Path] = []
+    try:
+        for path, data in targets:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            with path.open("xb") as f:
+                written.append(path)
+                f.write(data)
+    except FileExistsError as e:
+        for p in written:  # 開けなかった（別の実行の）パスは written に入っていない
+            p.unlink(missing_ok=True)
+        raise ConfigError(f"outputs: 同じ名前の絵を別の実行が先に書いた（置き換えない）: {path}") from e
     return [p for p, _ in targets]
