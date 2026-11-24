@@ -3,13 +3,12 @@
 ## 進捗
 作業: forge 本体に Modal の生成を戻す
 工程:
-1. Modal の仕組み・テスト・README・CLAUDE.md を forge 本体へ持ってくる ← 今ここ
-2. main を新しく clone して、README の手順どおりに Modal の T4 で見本を生成して確かめる
-3. コピー先の UPSTREAM.md の「forge に戻す候補」を、戻した状態に直す
-段階: 実装（3 タスク中 1）
+1. Modal の仕組み・テスト・README・CLAUDE.md を forge 本体へ持ってくる（完了）
+2. main を新しく clone して、README の手順どおりに Modal の T4 で見本を生成して確かめる（完了）
+3. コピー先の UPSTREAM.md の「forge に戻す候補」を、戻した状態に直す ← 今ここ
+段階: 実装（3 タスク中 2）
 次にやること:
-- 依頼者の確認後に push して main への PR にし、マージを待つ
-- マージ後、新しい clone で騎士の顔を数枚 Modal で生成して確かめる
+- コピー先の UPSTREAM.md を「戻した」に直す PR をマージする
 
 以後このリポジトリは、各作品のリポジトリへ丸ごとコピーして使う（作品ごとの作り込みはコピーの側で行う。`README.md` 8）。
 
@@ -19,6 +18,7 @@
 
 ## 状態
 
+- Modal の道（`python -m artgen.cloud`）を PR #6 で入れた。main（`fc4e601`）を新しく clone し、README の節 10 の手順で騎士の顔 2 枚を T4 で作れた（2026-11-24）。シード 3034254740 は、前回 Modal で作った絵と画素まで一致した（Colab の絵とは平均差約 4 で一致しない。README に記載）。Modal の Volume `illust-asset-forge-models` にモデルが入っている
 - GPU なしで動く部分（設定・プロンプト・PNG の条件・マスク・書き出し・`forge.py` の偽パイプラインでのテスト）は pytest で確かめ済み
 - ブランチ全体の最終レビュー済み（初期実装の分）。Critical 1・Important 4・Minor 7 をすべて直した
 - Colab で、モデルの読み込み・顔の生成・inpaint（表情）・全身の生成が動くことを、依頼者が確かめた（2026-11-21）。1 枚あたり、顔・全身は約 20 秒、表情は約 11 秒（T4）
