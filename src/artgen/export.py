@@ -183,11 +183,19 @@ def export_character(root: Path, char_id: str) -> list[Path]:
 
     # 消す: 今回の出力に無い、受け付ける名前（と、その名前に `-` 付きの名前）と、確認図
     wanted = set(owners)
-    stems = [name.removesuffix(".png") for name in accepted]
+    # 今の設定で受け付ける名前に加え、前回の書き出しの記録にあった名前（設定から外した表情など）も消す対象にする
+    managed = set(accepted)
+    previous_params = char_dir / "params.json"
+    if previous_params.is_file():
+        try:
+            managed |= {k for k in json.loads(previous_params.read_text(encoding="utf-8")) if k.endswith(".png")}
+        except (OSError, json.JSONDecodeError, TypeError):
+            pass  # 壊れた記録は、書き出しの最後で作り直す
+    stems = [name.removesuffix(".png") for name in managed]
     if char_dir.is_dir():
         for old in char_dir.glob("*.png"):
             stem = old.stem
-            if old not in wanted and (old.name in accepted or any(stem.startswith(f"{s}-") for s in stems)):
+            if old not in wanted and (old.name in managed or any(stem.startswith(f"{s}-") for s in stems)):
                 old.unlink()
     if checks.is_dir():
         for old in checks.glob("*.png"):

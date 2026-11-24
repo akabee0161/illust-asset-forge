@@ -149,3 +149,14 @@ def test_main_prints_path_or_error(exported, capsys):
     out = exported / "local/check/reviews/x.html"
     assert main(["c1", "--root", str(exported), "--out", str(out), "--variants"]) == 0
     assert out.is_file() and "face_hurt" in out.read_text(encoding="utf-8")
+
+
+def test_review_removes_old_page_when_check_fails(exported):
+    path = build_review(exported, "c1")
+    assert path.is_file()
+    changed = two_outputs()
+    changed["outputs"][0]["box"] = [0, 0, 900, 900]
+    set_cutouts(exported, {"face": changed})
+    with pytest.raises(ExportError):
+        build_review(exported, "c1")
+    assert not path.exists()  # 古い範囲のページを承認に出さない

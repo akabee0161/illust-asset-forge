@@ -335,6 +335,10 @@ def test_character_without_cutouts_has_empty_dict(repo):
         ("{face: {outputs: [{suffix: ''}]}}", "cutouts.face.background"),
         ("{face: {background: none}}", "cutouts.face.outputs"),
         ("[1]", "cutouts"),
+        ("{face: {background: none, outputs: [{suffix: '_small'}]}}", "cutouts.face.outputs[0].suffix"),
+        ("{face: {background: none, outputs: [{suffix: 'small'}]}}", "cutouts.face.outputs[0].suffix"),
+        ("{face: {background: none, outputs: [{suffix: '-'}]}}", "cutouts.face.outputs[0].suffix"),
+        ("{'../defaults': {background: none, outputs: [{suffix: ''}]}}", "cutouts.../defaults"),
         ("{face: {background: none, outputs: [{suffix: '', box: [5, 5, 1, 1]}]}}", "cutouts.face.outputs[0].box"),
     ],
 )

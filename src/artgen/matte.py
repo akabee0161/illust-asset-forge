@@ -14,6 +14,7 @@ from __future__ import annotations
 import hashlib
 import io
 import json
+import os
 from pathlib import Path
 
 from PIL import Image
@@ -95,9 +96,13 @@ def load_matte_with_sha(root: Path, char_id: str, name: str) -> tuple[Image.Imag
     redo = f"python -m artgen.cloud matte {char_id} で作る"
     if not (d / name).is_file() or not record_path.is_file():
         raise _error(f"characters/{char_id}/matte/{name}: 背景のマスクが無い。{redo}")
-    record = json.loads(record_path.read_text(encoding="utf-8"))
+    try:
+        record = json.loads(record_path.read_text(encoding="utf-8"))
+        recorded_sha = record.get("sources", {}).get(name)
+    except (OSError, json.JSONDecodeError, AttributeError) as e:
+        raise _error(f"characters/{char_id}/matte/matte.json: 読めない（{e}）。{redo}") from e
     src = Path(root) / "characters" / char_id / "source" / name
-    if record.get("sources", {}).get(name) != _sha256(src):
+    if recorded_sha != _sha256(src):
         raise _error(f"characters/{char_id}/matte/{name}: 背景のマスクが元画像より古い。{redo}")
     data = (d / name).read_bytes()
     with Image.open(io.BytesIO(data)) as m:
@@ -121,9 +126,17 @@ def ensure_candidate_mattes(candidates: list[Path], run_matte) -> int:
         model_sha, masks = run_matte({k: p.read_bytes() for k, p in batch.items()})
         if model_sha != MODEL_SHA256:
             raise _error(f"候補のマスクを作ったモデルが違う（{model_sha[:12]}…。{MODEL_SHA256[:12]}… のはず）")
+        if set(masks) != set(batch):
+            raise _error(f"Modal が返した候補のマスクが足りない（{len(masks)} 枚。{len(batch)} 枚のはず）")
         for k, p in batch.items():
-            with Image.open(io.BytesIO(masks[k])) as m:
-                m.convert("L").save(candidate_matte_path(p), format="PNG")
+            dest = candidate_matte_path(p)
+            tmp = dest.with_name(dest.name + ".tmp")
+            try:
+                with Image.open(io.BytesIO(masks[k])) as m:
+                    m.convert("L").save(tmp, format="PNG")
+                os.replace(tmp, dest)  # 書き終えてから置く（途中で落ちた壊れたマスクを、済んだ分として扱わない）
+            finally:
+                tmp.unlink(missing_ok=True)
     return len(todo)
 
 

@@ -124,3 +124,36 @@ def test_save_rejects_mask_when_source_changed_after_sending(cropped_repo):
         save_mattes(cropped_repo, "c1", {"face.png": png_bytes(Image.new("L", (1024, 1024)))}, MODEL_SHA256,
                     sent={"face.png": sent})
     assert not (cropped_repo / "characters/c1/matte").exists()
+
+
+def test_load_with_non_dict_matte_json_stops(cropped_repo):
+    save_mattes(cropped_repo, "c1", {"face.png": png_bytes(Image.new("L", (1024, 1024), 255))}, MODEL_SHA256)
+    (cropped_repo / "characters/c1/matte/matte.json").write_text("[1]", encoding="utf-8")
+    with pytest.raises(ExportError, match="matte.json"):
+        load_matte_with_sha(cropped_repo, "c1", "face.png")
+
+
+def test_candidate_matte_is_not_left_half_written(tmp_path, monkeypatch):
+    import os
+
+    from artgen.matte import candidate_matte_path, ensure_candidate_mattes
+
+    a = _candidate(tmp_path)
+
+    def broken_replace(src, dst):
+        raise OSError("書き込み中に落ちた")
+
+    monkeypatch.setattr(os, "replace", broken_replace)
+    with pytest.raises(OSError):
+        ensure_candidate_mattes([a], lambda images: (MODEL_SHA256, {k: png_bytes(Image.new("L", (64, 64), 255)) for k in images}))
+    assert not candidate_matte_path(a).exists()
+    assert not list(a.parent.glob("*.tmp"))
+
+
+def test_candidate_mattes_stop_when_modal_returns_too_few(tmp_path):
+    from artgen.matte import candidate_matte_path, ensure_candidate_mattes
+
+    a, b = _candidate(tmp_path), _candidate(tmp_path, "c1_face_2.png")
+    with pytest.raises(ExportError, match="足りない"):
+        ensure_candidate_mattes([a, b], lambda images: (MODEL_SHA256, {"0": png_bytes(Image.new("L", (64, 64), 255))}))
+    assert not candidate_matte_path(a).exists() and not candidate_matte_path(b).exists()

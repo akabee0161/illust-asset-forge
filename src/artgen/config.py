@@ -315,7 +315,8 @@ def load_character(root: Path, char_id: str) -> Character:
     )
 
 
-_SUFFIX_RE = re.compile(r"[A-Za-z0-9_-]*")
+_SUFFIX_RE = re.compile(r"(-[A-Za-z0-9_-]+)?")
+_TEMPLATE_KEY_RE = re.compile(r"[A-Za-z0-9_-]+")
 _BACKGROUNDS = ("matte", "colors", "none")
 
 
@@ -328,6 +329,8 @@ def _parse_cutouts(r: _Reader, root: Path, raw: Any) -> dict[str, Cutout]:
     for key, value in raw.items():
         key = str(key)
         where = f"cutouts.{key}"
+        if not _TEMPLATE_KEY_RE.fullmatch(key):
+            raise r.fail(where, "テンプレートの名前（半角英数字・_・-）でない")
         if not (root / "templates" / f"{key}.yaml").is_file():
             raise r.fail(where, f"templates/{key}.yaml が無い")
         cutouts[key] = _parse_cutout(r, where, key, value)
@@ -420,7 +423,7 @@ def _parse_outputs(r: _Reader, where: str, raw: Any) -> tuple[CutoutOutput, ...]
             raise r.fail(f"{w}.suffix", "必須のキーが無い")
         suffix = item["suffix"]
         if not isinstance(suffix, str) or not _SUFFIX_RE.fullmatch(suffix):
-            raise r.fail(f"{w}.suffix", f"半角英数字・_・- だけの文字列（空でもよい）でない: {suffix!r}")
+            raise r.fail(f"{w}.suffix", f"空か、- で始まる半角英数字・_・- の文字列でない（例: '-small'）: {suffix!r}")
         if suffix in seen:
             raise r.fail(f"{w}.suffix", f"同じテンプレートの中で重なる: {suffix!r}")
         seen.add(suffix)

@@ -363,3 +363,26 @@ def test_export_writes_check_images(repo):
     check = check_dir(repo, "c1")
     assert Image.open(check / "face.png").size == (1024, 1024)
     assert Image.open(check / "face-small.png").size == (512, 512)
+
+
+def test_export_removes_outputs_of_removed_expression(repo):
+    put(repo, "face.png", (1024, 1024), "face")
+    put(repo, "face_hurt.png", (1024, 1024), "face")
+    set_cutouts(repo, {"face": two_outputs()})
+    export_character(repo, "c1")
+    assert (repo / "characters/c1/face_hurt-small.png").exists()
+    (repo / "characters/c1/source/face_hurt.png").unlink()
+    set_cutouts(repo, {"face": two_outputs()}, base=CHARACTER_YAML.replace("hurt: [pain]", "shout: [x]"))
+    export_character(repo, "c1")
+    assert not (repo / "characters/c1/face_hurt.png").exists()
+    assert not (repo / "characters/c1/face_hurt-small.png").exists()
+    assert (repo / "characters/c1/face.png").exists()
+
+
+def test_export_stops_with_one_line_when_matte_json_is_broken(repo):
+    put(repo, "face.png", (1024, 1024), "face")
+    make_matte(repo, ["face.png"])
+    (repo / "characters/c1/matte/matte.json").write_text("{broken", encoding="utf-8")
+    set_cutouts(repo, {"face": two_outputs("matte")})
+    with pytest.raises(ExportError, match="matte.json.*cloud matte c1"):
+        export_character(repo, "c1")

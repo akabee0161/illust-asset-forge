@@ -477,3 +477,48 @@ def test_generate_shows_round_record_even_if_matte_fails(cli_env, monkeypatch, c
     out = capsys.readouterr().out
     record = sorted((cli_env / "local/rounds").glob("*.json"))[0]
     assert f"回りの記録: {record}" in out and "page" in out
+
+
+def test_matte_stops_when_modal_returns_too_few_masks(cli_env, monkeypatch, capsys):
+    _add_cutouts(cli_env, "c1", MATTE_FACE + NONE_FULLBODY.replace("none", "matte"))
+    _source(cli_env, "c1")
+    _source(cli_env, "c1", "fullbody.png", "fullbody")
+    module = types.ModuleType("artgen.modal_app")
+
+    def run_matte(images):
+        import io
+
+        from PIL import Image
+
+        from artgen.matte import MODEL_SHA256
+
+        buf = io.BytesIO()
+        Image.new("L", (64, 64), 255).save(buf, format="PNG")
+        return MODEL_SHA256, {"c1/face.png": buf.getvalue()}  # fullbody が返らない
+
+    module.run_matte = run_matte
+    monkeypatch.setitem(sys.modules, "artgen.modal_app", module)
+    assert cloud.main(["matte", "c1"]) == 1
+    assert "足りない" in capsys.readouterr().out
+    assert not (cli_env / "characters/c1/matte").exists()
+
+
+def test_generate_explains_retry_even_for_non_runtime_modal_errors(cli_env, monkeypatch, capsys):
+    made = make_candidates(cli_env)
+    outputs = [(p.relative_to(cli_env / "local/runs").as_posix(), p.read_bytes()) for p in made]
+    for p in made:
+        p.unlink()
+    fake_modal(monkeypatch, outputs)
+
+    class ModalLikeError(Exception):  # modal.exception.* は RuntimeError の子ではない
+        pass
+
+    def broken(images):
+        raise ModalLikeError("接続が切れた")
+
+    sys.modules["artgen.modal_app"].run_matte = broken
+    jobs = cli_env / "jobs.json"
+    jobs.write_text(json.dumps([{"char": "c1", "template": "face", "n": 1}]), encoding="utf-8")
+    assert cloud.main(["generate", "--jobs", str(jobs)]) == 1
+    out = capsys.readouterr().out
+    assert "回りの記録" in out and "page" in out and "接続が切れた" in out

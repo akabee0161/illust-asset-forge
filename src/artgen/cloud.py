@@ -27,7 +27,7 @@ from artgen.export import ExportError, _accepted_names
 from artgen.intake import install_selection, print_reports
 from artgen.jobs import collect_faces, load_jobs
 from artgen.local import local_commit, local_dirs, save_outputs
-from artgen.matte import ensure_candidate_mattes, save_mattes
+from artgen.matte import MODEL_SHA256, ensure_candidate_mattes, save_mattes
 from artgen.pnginfo import MissingParamsError, read_params
 from artgen.review_page import build_page
 from artgen.rounds import new_round, read_round, unused_run_id
@@ -56,7 +56,7 @@ def _build_or_explain(round_json: Path, root: Path, matte: bool) -> Path:
     """_build と同じ。背景消しが落ちたら、作った絵と記録は残っていて page でやり直せると言って止まる。"""
     try:
         return _build(round_json, root, matte)
-    except _STOPS as e:
+    except Exception as e:  # Modal の例外（modal.exception.*）は RuntimeError の子でない
         raise RuntimeError(
             f"{e}（絵と回りの記録は残っている。python -m artgen.cloud page {round_json} でやり直せる）"
         ) from e
@@ -131,6 +131,8 @@ def cmd_matte(args: argparse.Namespace) -> None:
     from artgen import modal_app  # Modal はここでだけ import する
 
     model_sha, masks = modal_app.run_matte(images)
+    if model_sha == MODEL_SHA256 and set(masks) != set(images):
+        raise ExportError(f"Modal が返したマスクが足りない（{len(masks)} 枚。{len(images)} 枚のはず）。何も置いていない")
     for char in args.chars:
         mine = {k.split("/", 1)[1]: v for k, v in masks.items() if k.split("/", 1)[0] == char}
         sent = {name: images[f"{char}/{name}"] for name in mine}

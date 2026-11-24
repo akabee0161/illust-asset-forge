@@ -266,9 +266,13 @@ figcaption {{ font-size: 13px; color: var(--muted); margin-top: 4px; }}
 
 def build_review(root: Path, char_id: str, variants: bool = False) -> Path:
     root = Path(root)
-    p = _collect(root, char_id, variants)
-    heading = html.escape(f"{p.character.name}（{char_id}）切り出し")
     out = root / "local" / "check" / char_id / "review.html"
+    try:
+        p = _collect(root, char_id, variants)
+    except (ExportError, ConfigError):
+        out.unlink(missing_ok=True)  # 前の範囲のページが残ると、古い範囲で承認してしまう
+        raise
+    heading = html.escape(f"{p.character.name}（{char_id}）切り出し")
     out.parent.mkdir(parents=True, exist_ok=True)
     out.write_text(_page(f"{p.character.name} 切り出し", f"<h1>{heading}</h1>\n{_body(p, many=False)}"), encoding="utf-8")
     return out
