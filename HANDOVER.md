@@ -7,16 +7,16 @@
 2. 実装計画（docs/superpowers/plans/2026-11-24-cutout.md）（完了）
 3. 実装と、一時フォルダでの本物の Modal での確かめ ← 今ここ
 4. コピー先の UPSTREAM.md の該当の行を「戻した」に直す（コピー先の PR）
-段階: 実装（9 タスク中 0）
+段階: 実装（9 タスク中 8）
 次にやること:
-- 別セッションがネイティブ方式で Task 1 から実装する
-- 最後に新しいレビュー役がブランチ全体を確かめる
+- Task 9: 一時フォルダで本物の Modal を通す（枚数と利用額の見込みを依頼者に伝えて、返事を待つ）
+- 新しいレビュー役がブランチ全体を確かめる
 
 以後このリポジトリは、各作品のリポジトリへ丸ごとコピーして使う（作品ごとの作り込みはコピーの側で行う。`README.md` 8）。
 
 ## 概要
 
-ゲーム用のキャラクターのイラストを Colab か Modal（T4）の GPU で生成する汎用のリポジトリ。Modal の道（`artgen.cloud`）は、最初のコピー先で作ったものを持ち帰った（コピー先の顔の切り出し `face_crop`・`crop_review` は持ち帰っていない）。設計は `docs/superpowers/specs/2026-11-21-illust-asset-forge-design.md`。使い方は `README.md`、作業規約は `CLAUDE.md`。
+ゲーム用のキャラクターのイラストを Colab か Modal（T4）の GPU で生成する汎用のリポジトリ。Modal の道（`artgen.cloud`）は、最初のコピー先で作ったものを持ち帰った（コピー先の顔の切り出し `face_crop`・`crop_review` は、テンプレートごとの切り出しと背景消し `cutout`・`cutout_review`・`matte` に広げて、このブランチ `feat/cutout` で持ち帰った。README 11）。設計は `docs/superpowers/specs/2026-11-21-illust-asset-forge-design.md`。使い方は `README.md`、作業規約は `CLAUDE.md`。
 
 ## 状態
 
