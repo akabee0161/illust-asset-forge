@@ -1,17 +1,21 @@
 # illust-asset-forge 引き継ぎ
 
 ## 進捗
-作業: 顔グラを生成 AI で作る
-段階: 実装（7 タスク中 7）
+作業: forge 本体に Modal の生成を戻す
+工程:
+1. Modal の仕組み・テスト・README・CLAUDE.md を forge 本体へ持ってくる ← 今ここ
+2. main を新しく clone して、README の手順どおりに Modal の T4 で見本を生成して確かめる
+3. コピー先の UPSTREAM.md の「forge に戻す候補」を、戻した状態に直す
+段階: 実装（3 タスク中 1）
 次にやること:
-- 依頼者の指示で、このブランチを main への PR にする。内容は、コピー先のレビューで出た CodeRabbit の指摘 7 件（pip の失敗で止める、設定に無い表情を採用しない、取り込みの控えの扱い、採用の中断と控えの削除の失敗、zip の同じ秒の上書き）。説明に、テストで確かめた範囲と、Colab で確かめていないこと（ノートブックの準備のセル）を書く
-- マージ後、ゲームのリポジトリのコピーは、同じ差分を手で当てて UPSTREAM.md を直す（最初のコピー先は済み）
+- 依頼者の確認後に push して main への PR にし、マージを待つ
+- マージ後、新しい clone で騎士の顔を数枚 Modal で生成して確かめる
 
 以後このリポジトリは、各作品のリポジトリへ丸ごとコピーして使う（作品ごとの作り込みはコピーの側で行う。`README.md` 8）。
 
 ## 概要
 
-ゲーム用のキャラクターのイラストを Colab の GPU で生成する汎用のリポジトリ。設計は `docs/superpowers/specs/2026-11-21-illust-asset-forge-design.md`。使い方は `README.md`、作業規約は `CLAUDE.md`。
+ゲーム用のキャラクターのイラストを Colab か Modal（T4）の GPU で生成する汎用のリポジトリ。Modal の道（`artgen.cloud`）は、最初のコピー先で作ったものを持ち帰った（コピー先の顔の切り出し `face_crop`・`crop_review` は持ち帰っていない）。設計は `docs/superpowers/specs/2026-11-21-illust-asset-forge-design.md`。使い方は `README.md`、作業規約は `CLAUDE.md`。
 
 ## 状態
 
