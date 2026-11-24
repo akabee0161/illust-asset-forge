@@ -386,3 +386,39 @@ def test_export_stops_with_one_line_when_matte_json_is_broken(repo):
     set_cutouts(repo, {"face": two_outputs("matte")})
     with pytest.raises(ExportError, match="matte.json.*cloud matte c1"):
         export_character(repo, "c1")
+
+
+def test_export_records_sha_of_the_source_it_rendered(repo, monkeypatch):
+    import artgen.export as E
+
+    path = put(repo, "face.png", (1024, 1024), "face")
+    make_matte(repo, ["face.png"])
+    set_cutouts(repo, {"face": two_outputs("matte")})
+    rendered_sha = hashlib.sha256(path.read_bytes()).hexdigest()
+    real_render = E.render
+    swapped = []
+
+    def render_then_swap(*args, **kwargs):
+        if not swapped:  # 描画のあいだに、別の処理が元の絵を差し替えた
+            swapped.append(True)
+            put(repo, "face.png", (1024, 1024), "face", seed=99)
+        return real_render(*args, **kwargs)
+
+    monkeypatch.setattr(E, "render", render_then_swap)
+    export_character(repo, "c1")
+    params = json.loads((repo / "characters/c1/params.json").read_text(encoding="utf-8"))
+    assert params["cutouts"]["face"]["source_sha256"]["face.png"] == rendered_sha
+
+
+def test_export_ignores_broken_previous_params(repo):
+    put(repo, "face.png", (1024, 1024), "face")
+    (repo / "characters/c1/params.json").write_text("[1]", encoding="utf-8")
+    export_character(repo, "c1")
+    assert list(json.loads((repo / "characters/c1/params.json").read_text(encoding="utf-8"))) == ["face.png"]
+
+
+def test_export_stops_when_output_height_would_be_zero(repo):
+    put(repo, "fullbody.png", (2000, 2), "fullbody")
+    set_cutouts(repo, {"fullbody": {"background": "none", "outputs": [{"suffix": "", "width": 10}]}})
+    with pytest.raises(ConfigError, match=r"cutouts\.fullbody\.outputs\[0\]\.width"):
+        export_character(repo, "c1")

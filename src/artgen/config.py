@@ -433,5 +433,7 @@ def _parse_outputs(r: _Reader, where: str, raw: Any) -> tuple[CutoutOutput, ...]
         width = item.get("width")
         if width is not None:
             width = r.as_int(f"{w}.width", width)
+            if box is not None and round(width * (box[3] - box[1]) / (box[2] - box[0])) < 1:
+                raise r.fail(f"{w}.width", f"範囲 {list(box)} の縦横の比では、幅 {width} の高さが 0 になる")
         outputs.append(CutoutOutput(suffix, box, width))
     return tuple(outputs)

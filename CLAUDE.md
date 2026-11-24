@@ -10,7 +10,7 @@
 
 ## 受け取った画像の扱い
 
-- 候補（生成された画像）はリポジトリに入れない。入れるのは `characters/<id>/source/` の採用した画像と、書き出した画像・`params.json` だけ
+- 候補（生成された画像）はリポジトリに入れない。入れるのは `characters/<id>/source/` の採用した画像と、書き出した画像・`params.json` だけ（例外は背景のマスク `characters/<id>/matte/`。書き出しを Modal 無しで再現するために入れる）
 - 採用した絵は、依頼者がノートブックのまとめのセルで作った zip で届く。**`python -m artgen.intake <zip>` で `source/` に取り込む**（`face.png`・`face_<表情>.png`・`fullbody.png` の名前、PNG に条件があること、キャラクターの一致を検査し、通らなければ何も書かずに止まる）。条件が無いときは添付で消えた可能性があるので、依頼者に知らせて止める
 - 採用した絵は、zip の代わりに Google Drive のコネクター（`download_file_content`）で `DRIVE_DIR` の `selected/<id>/` から取ってもよい。取った絵を `selected/<id>/` の形（`<id>/face.png` など）に置き、`install_selection` で取り込む。1 枚ごとに絵が会話に入るので、取るのは採用した絵だけにする。表情の範囲の `selection.json`（`selected/<id>/` にある）は画像ではないので、あれば一緒に取る（無いと範囲を書き戻せない）
 - Modal の道で作った候補は、このサーバーの `local/`（`.gitignore` 済み）にある。候補のページ（`local/rounds/<run_id>.html`）は Artifact で依頼者に見せる。ページには全部を並べ、Claude が機械的に外したり、目で見て選り分けたりしない（依頼者が全部を目で見て選ぶ）。依頼者が番号で答えたら、`python -m artgen.cloud adopt local/rounds/<run_id>.json <番号> [--flip]` で採用し（`--flip` は顔だけ）、`python -m artgen.cloud install <id>` で `characters/<id>/source/` に取り込む（頼んだキャラクターだけ。ほかの採用は触らない）。`install` は前回の `install` の後に採用し直した絵だけを入れ、ほかは今の `source/` から持ち越す（顔を採用し直したときの表情は持ち越さない）。出力の「消した」は、zip の道と同じく確かめる。取り込みの後の書き戻し・書き出しは、zip の道と同じ

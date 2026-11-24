@@ -335,6 +335,7 @@ def test_character_without_cutouts_has_empty_dict(repo):
         ("{face: {outputs: [{suffix: ''}]}}", "cutouts.face.background"),
         ("{face: {background: none}}", "cutouts.face.outputs"),
         ("[1]", "cutouts"),
+        ("{face: {background: none, outputs: [{suffix: '', box: [0, 0, 1024, 1], width: 256}]}}", "cutouts.face.outputs[0].width"),
         ("{face: {background: none, outputs: [{suffix: '_small'}]}}", "cutouts.face.outputs[0].suffix"),
         ("{face: {background: none, outputs: [{suffix: 'small'}]}}", "cutouts.face.outputs[0].suffix"),
         ("{face: {background: none, outputs: [{suffix: '-'}]}}", "cutouts.face.outputs[0].suffix"),
@@ -362,8 +363,8 @@ def test_clear_colors_keep_optional_min_rg(repo):
 
 def test_preview_background_is_optional(repo):
     assert load_preview_background(repo) is None
-    write(repo, "defaults.yaml", 'style: color-anime\npreview_background: "#18222C"\n')
-    assert load_preview_background(repo) == "#18222C"
+    write(repo, "defaults.yaml", 'style: color-anime\npreview_background: "#3366AA"\n')
+    assert load_preview_background(repo) == "#3366AA"
     write(repo, "defaults.yaml", "style: color-anime\npreview_background: red\n")
     with pytest.raises(ConfigError, match=re.escape("defaults.yaml: preview_background")):
         load_preview_background(repo)

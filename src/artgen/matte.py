@@ -88,9 +88,12 @@ def save_mattes(
     return written
 
 
-def load_matte_with_sha(root: Path, char_id: str, name: str) -> tuple[Image.Image, str]:
+def load_matte_with_sha(
+    root: Path, char_id: str, name: str, source_sha: str | None = None
+) -> tuple[Image.Image, str]:
     """元画像 name のマスクと、読んだ bytes の SHA-256 を返す（書き出しの記録を、描画に使ったマスクに合わせるため）。
-    マスクが無い・元画像より古いときは止める。"""
+    マスクが無い・元画像より古いときは止める。source_sha があれば、それを元画像の SHA-256 として照合する
+    （呼び出し側が読んだ bytes と照合し、読んだ後にファイルが差し替わっても食い違わないようにする）。"""
     d = matte_dir(root, char_id)
     record_path = d / "matte.json"
     redo = f"python -m artgen.cloud matte {char_id} で作る"
@@ -102,7 +105,7 @@ def load_matte_with_sha(root: Path, char_id: str, name: str) -> tuple[Image.Imag
     except (OSError, json.JSONDecodeError, AttributeError) as e:
         raise _error(f"characters/{char_id}/matte/matte.json: 読めない（{e}）。{redo}") from e
     src = Path(root) / "characters" / char_id / "source" / name
-    if recorded_sha != _sha256(src):
+    if recorded_sha != (source_sha if source_sha is not None else _sha256(src)):
         raise _error(f"characters/{char_id}/matte/{name}: 背景のマスクが元画像より古い。{redo}")
     data = (d / name).read_bytes()
     with Image.open(io.BytesIO(data)) as m:

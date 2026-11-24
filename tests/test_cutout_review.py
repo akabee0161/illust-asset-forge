@@ -136,9 +136,9 @@ def test_reviews_default_path_is_under_check_reviews(two_exported):
 def test_review_preview_section_only_with_preview_background(exported):
     html = build_review(exported, "c1").read_text(encoding="utf-8")
     assert '<div class="preview"' not in html
-    write(exported, "defaults.yaml", 'style: s\npreview_background: "#18222c"\n')
+    write(exported, "defaults.yaml", 'style: s\npreview_background: "#3366aa"\n')
     html = build_review(exported, "c1").read_text(encoding="utf-8")
-    assert '<div class="preview"' in html and "#18222c" in html
+    assert '<div class="preview"' in html and "#3366aa" in html
 
 
 def test_main_prints_path_or_error(exported, capsys):
@@ -160,3 +160,19 @@ def test_review_removes_old_page_when_check_fails(exported):
     with pytest.raises(ExportError):
         build_review(exported, "c1")
     assert not path.exists()  # 古い範囲のページを承認に出さない
+
+
+def test_reviews_remove_old_page_at_out_when_check_fails(two_exported):
+    import yaml
+
+    out = two_exported / "local/check/reviews/t.html"
+    build_reviews(two_exported, ["c1", "c2"], out)
+    assert out.is_file()
+    changed = two_outputs()
+    changed["outputs"][0]["width"] = 100
+    p = two_exported / "characters/c2/character.yaml"
+    write(two_exported, "characters/c2/character.yaml", CHARACTER_YAML.replace("name: C\n", "name: D\n"))
+    p.write_text(p.read_text(encoding="utf-8") + yaml.safe_dump({"cutouts": {"face": changed}}), encoding="utf-8")
+    with pytest.raises(ExportError, match="c2"):
+        build_reviews(two_exported, ["c1", "c2"], out)
+    assert not out.exists()

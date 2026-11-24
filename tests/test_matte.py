@@ -157,3 +157,15 @@ def test_candidate_mattes_stop_when_modal_returns_too_few(tmp_path):
     with pytest.raises(ExportError, match="足りない"):
         ensure_candidate_mattes([a, b], lambda images: (MODEL_SHA256, {"0": png_bytes(Image.new("L", (64, 64), 255))}))
     assert not candidate_matte_path(a).exists() and not candidate_matte_path(b).exists()
+
+
+def test_load_compares_with_given_source_sha_instead_of_the_file(cropped_repo):
+    import hashlib
+
+    src = cropped_repo / "characters/c1/source/face.png"
+    original = hashlib.sha256(src.read_bytes()).hexdigest()
+    save_mattes(cropped_repo, "c1", {"face.png": png_bytes(Image.new("L", (1024, 1024), 255))}, MODEL_SHA256)
+    put(cropped_repo, "face.png", (1024, 1024), "face", seed=99)  # 読んだ後にファイルが差し替わった
+    load_matte_with_sha(cropped_repo, "c1", "face.png", source_sha=original)  # 読んだ bytes と照合するので通る
+    with pytest.raises(ExportError, match="古い"):
+        load_matte_with_sha(cropped_repo, "c1", "face.png", source_sha="0" * 64)

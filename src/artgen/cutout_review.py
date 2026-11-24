@@ -286,6 +286,8 @@ def build_reviews(root: Path, char_ids: list[str], out: Path | None = None, vari
         try:
             parts.append(_collect(root, char_id, variants))
         except (ExportError, ConfigError) as e:
+            if out is not None:
+                Path(out).unlink(missing_ok=True)  # 前の範囲のページが残ると、古い範囲で承認してしまう
             message = str(e) if char_id in str(e) else f"{char_id}: {e}"
             raise type(e)(message) from e
     sections = "".join(

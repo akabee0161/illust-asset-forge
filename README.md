@@ -271,7 +271,7 @@ cutouts:
 
 1. `character.yaml` に `cutouts` を書く
 2. `background: matte` なら `.venv/bin/python -m artgen.cloud matte <id> [<id> ...]`。`cutouts` で `background: matte` のテンプレートの元の絵（`source/`）を Modal の CPU に送り、`characters/<id>/matte/` にマスクを置く。`matte.json` に、モデルと元の絵の SHA-256 を記録する。応答を待つあいだに元の絵が差し替わったら止まる
-3. `python -m artgen.export <id>`: 切り抜いて背景を消した絵を `characters/<id>/` に書き、`params.json` の `cutouts` に使った設定・元の絵・マスクの SHA-256 を記録する。透明にした画素を赤で塗った確認図を `local/check/<id>/` に置く（リポジトリに入れない）。元の絵を差し替えたのにマスクを作り直していないと止まり、`cloud matte` を案内する。`cutouts` を消した・出力を減らしたときは、前の書き出しの RGBA・`-small`・確認図を消す。すべての入力を検査してから書くので、途中で止まっても何も書かれない。`characters/<id>/` の `<元の名前>-*.png`（`face-small.png` など）と、前回の書き出しの記録にあった名前の絵は、書き出しが管理して消す対象になる（手でそこに置かない）
+3. `python -m artgen.export <id>`: 切り抜いて背景を消した絵を `characters/<id>/` に書き、`params.json` の `cutouts` に使った設定・元の絵・マスクの SHA-256 を記録する。透明にした画素を赤で塗った確認図を `local/check/<id>/` に置く（リポジトリに入れない）。元の絵を差し替えたのにマスクを作り直していないと止まり、`cloud matte` を案内する。`cutouts` を消した・出力を減らしたときは、前の書き出しの RGBA・`-small`・確認図を消す。すべての入力を検査してから書くので、検査で止まったときは何も書かれない（書き込みの途中でディスクなどが失敗した場合は除く）。`characters/<id>/` の `<元の名前>-*.png`（`face-small.png` など）と、前回の書き出しの記録にあった名前の絵は、書き出しが管理して消す対象になる（手でそこに置かない）
 4. `python -m artgen.cutout_review <id> [<id> ...] [--out PATH] [--variants]`: 承認用ページを作る（1 人なら `local/check/<id>/review.html`、何人分かなら 1 枚）。元の絵に範囲を色違いの枠で描いた絵、確認図、書き出した絵を書き出した大きさで（市松模様の上と、`preview_background` があればその色の上）並べる。表情（`face_<表情>.png`）は `--variants` を付けたときだけ並べる。範囲や `erase` を直した・マスクを作り直したのに書き出していないときは、ページを作らず止まる（古い絵で承認すると承認が意味を失うため）。何人分かのページは、全員を先に検査し、1 人でも通らなければ作らない
 5. ページを Artifact で依頼者に見せ、承認を受ける
 
