@@ -3,18 +3,57 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import shutil
 from pathlib import Path
 
 from PIL import Image
 
-from artgen.config import ConfigError, load_character, load_template
+from artgen.config import ConfigError, Cutout, load_character, load_template
+from artgen.cutout import output_name, prepared_mask, render
+from artgen.matte import load_matte_with_sha
 from artgen.pnginfo import MissingParamsError, read_params
 
 
 class ExportError(Exception):
     """書き出せない入力（名前・形・条件の不足）。"""
+
+
+def check_dir(root: Path, char_id: str) -> Path:
+    """確認図（透明にした画素を赤で塗った絵）の置き場。リポジトリに入れない。"""
+    return Path(root) / "local" / "check" / char_id
+
+
+def cutout_record(cutout: Cutout, source_dir: Path, names: list[str], matte_shas: dict[str, str] | None = None) -> dict:
+    """params.json の cutouts に書く、テンプレート 1 つぶんの記録。使った設定と、切り出した元の絵の SHA-256。
+    承認用ページ（cutout_review）が、書き出しが今の設定・今の元の絵・今のマスクのものかを照合するのに使う。
+    matte_shas は書き出しが描画に使ったマスクの SHA-256（読み込んだ bytes から求めたもの）。
+    無ければ今の matte/ のファイルから求める（無いファイルは None）。"""
+    record = {
+        "background": cutout.background,
+        # min_rg は書いたときだけ記録する
+        "clear_colors": [
+            {"min": c.min, "max_rg": c.max_rg, "max_gb": c.max_gb, **({"min_rg": c.min_rg} if c.min_rg is not None else {})}
+            for c in cutout.clear_colors
+        ],
+        "erase": [[list(p) for p in poly] for poly in cutout.erase],
+        "outputs": [
+            {"suffix": o.suffix, "box": list(o.box) if o.box is not None else None, "width": o.width}
+            for o in cutout.outputs
+        ],
+        "source_sha256": {n: hashlib.sha256((source_dir / n).read_bytes()).hexdigest() for n in sorted(names)},
+    }
+    if cutout.background == "matte":
+        matte_dir = source_dir.parent / "matte"
+        if matte_shas is not None:
+            record["matte_sha256"] = {n: matte_shas.get(n) for n in sorted(names)}
+        else:
+            record["matte_sha256"] = {
+                n: hashlib.sha256((matte_dir / n).read_bytes()).hexdigest() if (matte_dir / n).is_file() else None
+                for n in sorted(names)
+            }
+    return record
 
 
 def _accepted_names(expressions: list[str]) -> list[str]:
@@ -52,7 +91,8 @@ def _check_matches_name(src: Path, rel_source: str, params: dict, template_name:
 def export_character(root: Path, char_id: str) -> list[Path]:
     """`characters/<id>/source/*.png` を `characters/<id>/` に書き出し、params.json を作る。
 
-    すべての入力を検査してから書き始めるので、途中で止まっても何も書かれない。
+    すべての入力（設定・元の絵・マスク）を検査してから書き始めるので、途中で止まっても何も書かれない。
+    テンプレートに `cutouts` があれば、その出力ごとに範囲を切り抜いて背景を透明にした RGBA を書く。
     """
     root = Path(root)
     if not char_id or Path(char_id).name != char_id or char_id in (".", ".."):
@@ -70,7 +110,8 @@ def export_character(root: Path, char_id: str) -> list[Path]:
         raise ExportError(f"{rel_source}: PNG が無い")
 
     accepted = _accepted_names(list(character.expressions))
-    plans: list[tuple[Path, Path, int | None]] = []
+    # (元の絵, 出力先, export_size, cutout)。cutout があるときは出力先と export_size を使わない
+    plans: list[tuple[Path, Path, int | None, Cutout | None]] = []
     all_params: dict[str, dict] = {}
     for src in sources:
         if src.name not in accepted:
@@ -84,31 +125,99 @@ def export_character(root: Path, char_id: str) -> list[Path]:
         template = load_template(root, template_name)
         _check_matches_name(src, rel_source, params, template_name, character)
 
-        if template.export_size is not None:
-            with Image.open(src) as im:
-                if im.width != im.height:
-                    raise ExportError(
-                        f"{rel_source}/{src.name}: 正方形でない（{im.width}x{im.height}）。"
-                        "顔は正方形で生成する"
-                    )
-        plans.append((src, char_dir / src.name, template.export_size))
+        cutout = character.cutouts.get(template_name)
+        with Image.open(src) as im:
+            if cutout is not None:
+                for i, output in enumerate(cutout.outputs):
+                    box = output.box
+                    if box is not None and (box[2] > im.width or box[3] > im.height):
+                        raise ConfigError(
+                            f"characters/{char_id}/character.yaml: cutouts.{template_name}.outputs[{i}].box: "
+                            f"範囲 {list(box)} が元の絵 {src.name}（{im.width}x{im.height}）の外にはみ出す"
+                        )
+            elif template.export_size is not None and im.width != im.height:
+                raise ExportError(
+                    f"{rel_source}/{src.name}: 正方形でない（{im.width}x{im.height}）。"
+                    "顔は正方形で生成する"
+                )
+        plans.append((src, char_dir / src.name, template.export_size, cutout))
         all_params[src.name] = params
 
-    # 今回の source に無い古い出力は、params.json と食い違うので消す
-    current = {dest.name for _, dest, _ in plans}
-    for name in accepted:
-        if name not in current:
-            (char_dir / name).unlink(missing_ok=True)
+    checks = check_dir(root, char_id)
+    # 書き出すファイルと確認図。これに無い古い出力は、params.json と食い違うので消す
+    owners: dict[Path, str] = {}
+
+    def claim(path: Path, owner: str) -> None:
+        # 表情名が `normal` と `normal-small` のように、別の入力の出力が同じ名前になるときは、書く前に止める
+        if owners.setdefault(path, owner) != owner:
+            raise ExportError(f"{path.name}: {owners[path]} と {owner} の出力が同じ名前になる（表情名を変える）")
+
+    for src, dest, _, cutout in plans:
+        if cutout is None:
+            claim(dest, src.name)
+            continue
+        for output in cutout.outputs:
+            name = output_name(src.name, output.suffix)
+            claim(char_dir / name, src.name)
+            claim(checks / name, src.name)
+
+    # マスクも、今の出力を消したり書き換えたりする前に全部読んで検査する
+    # （表情のマスクだけが古いときに、顔だけを書き換えてから止まると、出力と params.json が食い違う）
+    masks: dict[str, Image.Image] = {}
+    mask_shas: dict[str, str] = {}  # 記録には、描画に使うこのマスクの SHA-256 を書く（後で更新されても食い違わない）
+    for src, _, _, cutout in plans:
+        if cutout is not None and cutout.background == "matte":
+            loaded, mask_shas[src.name] = load_matte_with_sha(root, char_id, src.name)
+            masks[src.name] = prepared_mask(loaded, cutout.erase)
+
+    # 書く絵は、何かを消す前に全部作る
+    rendered: list[tuple[Path, Image.Image, Path | None, Image.Image | None]] = []
+    for src, dest, size, cutout in plans:
+        if cutout is None:
+            continue
+        with Image.open(src) as im:
+            for output in cutout.outputs:
+                name = output_name(src.name, output.suffix)
+                image, check = render(im, output, cutout.background, cutout.clear_colors, masks.get(src.name))
+                rendered.append((char_dir / name, image, checks / name, check))
+
+    # 消す: 今回の出力に無い、受け付ける名前（と、その名前に `-` 付きの名前）と、確認図
+    wanted = set(owners)
+    stems = [name.removesuffix(".png") for name in accepted]
+    if char_dir.is_dir():
+        for old in char_dir.glob("*.png"):
+            stem = old.stem
+            if old not in wanted and (old.name in accepted or any(stem.startswith(f"{s}-") for s in stems)):
+                old.unlink()
+    if checks.is_dir():
+        for old in checks.glob("*.png"):
+            if old not in wanted:
+                old.unlink()
 
     written: list[Path] = []
-    for src, dest, size in plans:
+    for src, dest, size, cutout in plans:
+        if cutout is not None:
+            continue
         if size is None:
             shutil.copyfile(src, dest)
         else:
             with Image.open(src) as im:
                 im.convert("RGB").resize((size, size), Image.Resampling.LANCZOS).save(dest, format="PNG")
         written.append(dest)
+    for out_path, image, check_path, check in rendered:
+        checks.mkdir(parents=True, exist_ok=True)
+        image.save(out_path, format="PNG")
+        check.save(check_path, format="PNG")
+        written.append(out_path)
 
+    records: dict[str, dict] = {}
+    for template_name, cutout in character.cutouts.items():
+        names = [src.name for src, _, _, c in plans if c is cutout]
+        if names:
+            shas = mask_shas if cutout.background == "matte" else None
+            records[template_name] = cutout_record(cutout, source_dir, names, shas)
+    if records:
+        all_params["cutouts"] = records
     params_path = char_dir / "params.json"
     params_path.write_text(
         json.dumps(all_params, ensure_ascii=False, indent=2, sort_keys=True) + "\n",
