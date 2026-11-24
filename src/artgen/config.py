@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
@@ -38,6 +38,39 @@ class Template:
 
 
 @dataclass(frozen=True)
+class ClearColor:
+    """外につながる白のほかに透明にする色。全チャンネルの最小値が min 以上、
+    かつ r-g <= max_rg、かつ g-b <= max_gb。min_rg があれば r-g >= min_rg も
+    （赤みの強い背景と、赤みの弱い服のクリーム色を見分けるため）。"""
+
+    min: int
+    max_rg: int
+    max_gb: int
+    min_rg: int | None = None
+
+
+@dataclass(frozen=True)
+class CutoutOutput:
+    """切り出しの出力 1 件。出力の名前は元の名前に suffix を付ける。
+    box が None なら絵の全体、width が None なら縮めない。"""
+
+    suffix: str
+    box: tuple[int, int, int, int] | None
+    width: int | None
+
+
+@dataclass(frozen=True)
+class Cutout:
+    """テンプレート 1 つぶんの切り出しと背景消しの設定。background は matte・colors・none。"""
+
+    template: str
+    background: str
+    clear_colors: tuple[ClearColor, ...]
+    erase: tuple[tuple[tuple[int, int], ...], ...]
+    outputs: tuple[CutoutOutput, ...]
+
+
+@dataclass(frozen=True)
 class Character:
     id: str
     name: str
@@ -50,6 +83,7 @@ class Character:
     default_expression: str
     expressions: dict[str, list[str]]
     inpaint_box: tuple[int, int, int, int] | None
+    cutouts: dict[str, Cutout] = field(default_factory=dict)
 
 
 _MISSING = object()
@@ -149,6 +183,20 @@ def load_default_style(root: Path) -> str:
     return _Reader(root, "defaults.yaml").string("style")
 
 
+_HEX_COLOR_RE = re.compile(r"#[0-9A-Fa-f]{6}")
+
+
+def load_preview_background(root: Path) -> str | None:
+    """候補・確認のページで背景を消した絵を置く色（defaults.yaml の preview_background）。無ければ None。"""
+    r = _Reader(root, "defaults.yaml")
+    value = r.data.get("preview_background")
+    if value is None:
+        return None
+    if not isinstance(value, str) or not _HEX_COLOR_RE.fullmatch(value):
+        raise r.fail("preview_background", f"#rrggbb の色でない: {value!r}")
+    return value
+
+
 def load_style(root: Path, name: str) -> Style:
     r = _Reader(root, f"styles/{name}.yaml")
     return Style(name=name, prompt=r.tags("prompt"), negative=r.tags("negative"))
@@ -246,6 +294,8 @@ def load_character(root: Path, char_id: str) -> Character:
     if box is not None:
         box = r.box("inpaint_box", box)
 
+    cutouts = _parse_cutouts(r, root, r._get("cutouts", None))
+
     return Character(
         id=char_id,
         name=r.string("name"),
@@ -258,4 +308,124 @@ def load_character(root: Path, char_id: str) -> Character:
         default_expression=default_expression,
         expressions=expressions,
         inpaint_box=box,
+        cutouts=cutouts,
     )
+
+
+_SUFFIX_RE = re.compile(r"[A-Za-z0-9_-]*")
+_BACKGROUNDS = ("matte", "colors", "none")
+
+
+def _parse_cutouts(r: _Reader, root: Path, raw: Any) -> dict[str, Cutout]:
+    if raw is None:
+        return {}
+    if not isinstance(raw, dict):
+        raise r.fail("cutouts", "テンプレートの名前と設定の組でない")
+    cutouts = {}
+    for key, value in raw.items():
+        key = str(key)
+        where = f"cutouts.{key}"
+        if not (root / "templates" / f"{key}.yaml").is_file():
+            raise r.fail(where, f"templates/{key}.yaml が無い")
+        cutouts[key] = _parse_cutout(r, where, key, value)
+    return cutouts
+
+
+def _parse_cutout(r: _Reader, where: str, template: str, raw: Any) -> Cutout:
+    if not isinstance(raw, dict):
+        raise r.fail(where, "キーと値の組でない")
+    unknown = set(raw) - {"background", "clear_colors", "erase", "outputs"}
+    if unknown:
+        raise r.fail(where, f"知らないキー: {', '.join(sorted(map(str, unknown)))}")
+    if "background" not in raw:
+        raise r.fail(f"{where}.background", "必須のキーが無い")
+    background = raw["background"]
+    if background not in _BACKGROUNDS:
+        raise r.fail(f"{where}.background", f"{' か '.join(_BACKGROUNDS)} のどれかでない: {background!r}")
+    colors = _parse_clear_colors(r, f"{where}.clear_colors", raw.get("clear_colors"))
+    if colors and background != "colors":
+        raise r.fail(f"{where}.clear_colors", "background: colors のときだけ書ける")
+    erase = _parse_erase(r, f"{where}.erase", raw.get("erase"))
+    if erase and background != "matte":
+        raise r.fail(f"{where}.erase", "background: matte のときだけ書ける（マスクから消す多角形）")
+    if "outputs" not in raw:
+        raise r.fail(f"{where}.outputs", "必須のキーが無い")
+    outputs = _parse_outputs(r, f"{where}.outputs", raw["outputs"])
+    return Cutout(template, background, colors, erase, outputs)
+
+
+def _parse_clear_colors(r: _Reader, where: str, raw: Any) -> tuple[ClearColor, ...]:
+    if raw is None:
+        return ()
+    if not isinstance(raw, list):
+        raise r.fail(where, "色の条件の一覧でない")
+    colors = []
+    for i, item in enumerate(raw):
+        w = f"{where}[{i}]"
+        if not isinstance(item, dict) or not {"min", "max_rg", "max_gb"} <= set(item) <= {"min", "max_rg", "max_gb", "min_rg"}:
+            raise r.fail(w, "min・max_rg・max_gb（と任意の min_rg）の組でない")
+        values = {}
+        for key in ("min", "max_rg", "max_gb", "min_rg"):
+            if key not in item:
+                continue
+            v = r.as_int(f"{w}.{key}", item[key], positive=False)
+            if not 0 <= v <= 255:
+                raise r.fail(f"{w}.{key}", f"0〜255 の整数でない: {v}")
+            values[key] = v
+        if values.get("min_rg") is not None and values["min_rg"] > values["max_rg"]:
+            raise r.fail(f"{w}.min_rg", f"max_rg（{values['max_rg']}）より大きい: {values['min_rg']}")
+        colors.append(ClearColor(**values))
+    return tuple(colors)
+
+
+def _parse_erase(r: _Reader, where: str, raw: Any) -> tuple[tuple[tuple[int, int], ...], ...]:
+    if raw is None:
+        return ()
+    if not isinstance(raw, list):
+        raise r.fail(where, "多角形の一覧でない")
+    polygons = []
+    for i, poly in enumerate(raw):
+        w = f"{where}[{i}]"
+        if not isinstance(poly, list) or len(poly) < 3:
+            raise r.fail(w, "3 点以上の [x, y] の一覧でない")
+        points = []
+        for j, pt in enumerate(poly):
+            if not isinstance(pt, list) or len(pt) != 2:
+                raise r.fail(f"{w}[{j}]", f"[x, y] でない: {pt!r}")
+            x = r.as_int(f"{w}[{j}]", pt[0], positive=False)
+            y = r.as_int(f"{w}[{j}]", pt[1], positive=False)
+            if x < 0 or y < 0:
+                raise r.fail(f"{w}[{j}]", f"負の座標: {pt!r}")
+            points.append((x, y))
+        polygons.append(tuple(points))
+    return tuple(polygons)
+
+
+def _parse_outputs(r: _Reader, where: str, raw: Any) -> tuple[CutoutOutput, ...]:
+    if not isinstance(raw, list) or not raw:
+        raise r.fail(where, "出力を 1 件以上並べた一覧でない")
+    outputs = []
+    seen: set[str] = set()
+    for i, item in enumerate(raw):
+        w = f"{where}[{i}]"
+        if not isinstance(item, dict):
+            raise r.fail(w, "キーと値の組でない")
+        unknown = set(item) - {"suffix", "box", "width"}
+        if unknown:
+            raise r.fail(w, f"知らないキー: {', '.join(sorted(map(str, unknown)))}")
+        if "suffix" not in item:
+            raise r.fail(f"{w}.suffix", "必須のキーが無い")
+        suffix = item["suffix"]
+        if not isinstance(suffix, str) or not _SUFFIX_RE.fullmatch(suffix):
+            raise r.fail(f"{w}.suffix", f"半角英数字・_・- だけの文字列（空でもよい）でない: {suffix!r}")
+        if suffix in seen:
+            raise r.fail(f"{w}.suffix", f"同じテンプレートの中で重なる: {suffix!r}")
+        seen.add(suffix)
+        box = item.get("box")
+        if box is not None:
+            box = r.box(f"{w}.box", box)
+        width = item.get("width")
+        if width is not None:
+            width = r.as_int(f"{w}.width", width)
+        outputs.append(CutoutOutput(suffix, box, width))
+    return tuple(outputs)
