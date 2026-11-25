@@ -28,6 +28,84 @@ def test_page_embeds_small_images_and_title(repo, tmp_path):
     out = build_page(make_round(repo), tmp_path / "p.html")
     html = out.read_text(encoding="utf-8")
     assert "<title>候補 c1 20261123_120000</title>" in html
-    assert len(re.findall(r"data:image/png;base64,", html)) == 3
+    assert len(re.findall(r"data:image/jpeg;base64,", html)) == 3
     assert out.stat().st_size < 2_000_000
     assert "prefers-color-scheme: dark" in html and 'name="viewport"' in html
+
+
+def test_page_groups_candidates_by_character_with_name(repo, tmp_path):
+    forge = make_forge(repo)
+    c1 = forge.generate("c1", "face", seeds=[1, 2])
+    c2 = forge.generate("c2", "face", seeds=[3])
+    r = read_round(new_round(repo / "local" / "rounds", "r3", [*c1, *c2]))
+    html = build_page(r, tmp_path / "p.html", root=repo).read_text(encoding="utf-8")
+    assert html.count("<h2") == 2
+    assert "C（c1）" in html and "C（c2）" in html
+    assert html.index("（c1）") < html.index("1 番") < html.index("2 番") < html.index("（c2）") < html.index("3 番")
+    assert "<details" not in html
+
+
+def test_page_thumbnails_are_jpeg_and_small(repo, tmp_path):
+    html = build_page(make_round(repo), tmp_path / "p.html").read_text(encoding="utf-8")
+    assert len(re.findall(r"data:image/jpeg;base64,", html)) == 3
+    assert "data:image/png" not in html
+    for uri in re.findall(r'src="(data:image/jpeg;base64,[^"]+)"', html):
+        assert len(uri) < 80_000
+
+
+def test_page_heading_falls_back_to_id_without_root(repo, tmp_path):
+    html = build_page(make_round(repo), tmp_path / "p.html").read_text(encoding="utf-8")
+    assert "<h2>c1</h2>" in html
+
+
+def _with_all_background_masks(repo):
+    from PIL import Image
+
+    from artgen.matte import candidate_matte_path
+
+    r = make_round(repo)
+    for c in r.candidates:
+        Image.new("L", Image.open(c.path).size, 0).save(candidate_matte_path(c.path))  # 全部背景
+    return r
+
+
+def test_page_shows_matted_thumbnail_next_to_each_candidate(repo, tmp_path):
+    r = _with_all_background_masks(repo)
+    html = build_page(r, tmp_path / "p.html").read_text(encoding="utf-8")
+    uris = re.findall(r'src="(data:image/jpeg;base64,[^"]+)"', html)
+    assert len(uris) == 6  # 候補そのものと、背景を消した絵
+    assert html.count('class="cut"') == 3
+    assert "右が背景を消した絵" in html
+    for uri in uris:
+        assert len(uri) < 50_000  # 2 枚ずつでも 200 枚で 16MB に収まる大きさ
+
+
+def test_page_without_mattes_is_unchanged(repo, tmp_path):
+    html = build_page(make_round(repo), tmp_path / "p.html").read_text(encoding="utf-8")
+    assert 'class="cut"' not in html
+
+
+def _first_cut_image(html):
+    import base64
+    import io
+
+    from PIL import Image
+
+    m = re.search(r'class="cut"[^>]*src="data:image/jpeg;base64,([^"]+)"', html)
+    return Image.open(io.BytesIO(base64.b64decode(m.group(1)))).convert("RGB")
+
+
+def test_page_cut_thumbnail_uses_preview_background(repo, tmp_path):
+    write(repo, "defaults.yaml", 'style: s\npreview_background: "#ff0000"\n')
+    r = _with_all_background_masks(repo)
+    cut = _first_cut_image(build_page(r, tmp_path / "p.html", root=repo).read_text(encoding="utf-8"))
+    red, green, blue = cut.getpixel((cut.width // 2, cut.height // 2))
+    assert red > 200 and green < 60 and blue < 60
+
+
+def test_page_cut_thumbnail_without_preview_background_uses_checker(repo, tmp_path):
+    r = _with_all_background_masks(repo)
+    cut = _first_cut_image(build_page(r, tmp_path / "p.html", root=repo).read_text(encoding="utf-8"))
+    pixels = {cut.getpixel((x, y)) for x in range(0, cut.width, 4) for y in range(0, cut.height, 4)}
+    assert any(abs(p[0] - 0xDF) < 12 and abs(p[2] - 0xE8) < 12 for p in pixels)
+    assert any(min(p) > 247 for p in pixels)

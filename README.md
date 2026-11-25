@@ -21,6 +21,7 @@ GPU を使う処理は、量産は Claude が Modal で、手で試すときは�
 8. [コピーして使う](#8-コピーして使う)
 9. [見本の 4 人](#9-見本の-4-人)
 10. [Modal で作る（量産）](#10-modal-で作る量産)
+11. [切り出しと背景消し](#11-切り出しと背景消し)
 
 ---
 
@@ -34,7 +35,8 @@ GPU を使う処理は、量産は Claude が Modal で、手で試すときは�
 | `characters/<id>/character.yaml` | キャラクターの設定（外見・表情の一覧・描き直す範囲 `inpaint_box`）。画風 `style` は、デフォルトと違う画風にするときだけ書く |
 | `characters/<id>/source/` | 採用した元の画像（受け取ったもの） |
 | `characters/<id>/face.png` など・`params.json` | 書き出した受け渡しの形 |
-| `src/artgen/` | `config`（読み込み）・`prompt`（組み立て）・`pnginfo`（条件の読み書き）・`mask`（描き直す範囲）・`selection`（採用した絵の置き場・run の候補探し）・`picker`（ノートブックのボタンの画面）・`intake`（zip の取り込み）・`export`（書き出し）・`forge`（生成。Colab と Modal の上で動く）・`jobs`（Modal のジョブ）・`local`（`local/` の置き場）・`rounds`（1 回りの候補の記録）・`review_page`（候補のページ）・`modal_app`（Modal の入口）・`cloud`（Modal の道の CLI） |
+| `characters/<id>/matte/` | 背景のマスク（`cloud matte` が Modal で作る）と、その記録 `matte.json`。リポジトリに入れる（書き出しを Modal 無しで再現するため） |
+| `src/artgen/` | `config`（読み込み）・`prompt`（組み立て）・`pnginfo`（条件の読み書き）・`mask`（描き直す範囲）・`selection`（採用した絵の置き場・run の候補探し）・`picker`（ノートブックのボタンの画面）・`intake`（zip の取り込み）・`export`（書き出し）・`forge`（生成。Colab と Modal の上で動く）・`jobs`（Modal のジョブ）・`local`（`local/` の置き場）・`rounds`（1 回りの候補の記録）・`review_page`（候補のページ）・`matte`（背景のマスクの置き場と読み込み・候補のマスクのキャッシュ）・`cutout`（範囲の切り抜きと背景を透明にする描画）・`cutout_review`（切り出しの承認用ページ）・`modal_app`（Modal の入口）・`cloud`（Modal の道の CLI） |
 | `notebooks/run.ipynb` | Colab の入口 |
 | `requirements-colab.txt` | Colab で入れるライブラリ（版を固定） |
 
@@ -98,8 +100,9 @@ YAML のタグにカンマを含む重み付きタグを書くときは、引用
 1. `python -m artgen.intake <zip>` で、zip の中身を `characters/<id>/source/` に取り込む。`source/` は丸ごと置き換わり、検査に通らなければ何も書かれない。出力に、取り込んだ・消したファイルと、書き戻すもの（PNG の条件の `overrides`・`selection.json` の範囲 `inpaint_box`）の一覧が出る
 2. 出力の一覧を `character.yaml` などの設定に戻す（`overrides` の `style` は `character.yaml` の `style` へ。ただし `defaults.yaml` の `style` と同じ画風なら、書かずに `character.yaml` の `style` を消してデフォルトに戻す。範囲は `inpaint_box` へ）
 3. 必要なら `python -m artgen.pnginfo characters/<id>/source/*.png` で PNG の条件を確かめる
-4. `python -m artgen.export <id>` で書き出す（顔は 256×256 に縮め、`params.json` を作る）
-5. push は依頼者が頼んだときだけ行う
+4. `python -m artgen.export <id>` で書き出す（`cutouts` が無いテンプレートの絵は、顔は 256×256 に縮め、全身はそのまま写す。`params.json` を作る）
+5. 背景を透明にして切り出したいときは、`character.yaml` に `cutouts` を書き（[11](#11-切り出しと背景消し)）、`python -m artgen.cloud matte <id>`（`background: matte` のとき）→ `python -m artgen.export <id>` → `python -m artgen.cutout_review <id>` の順に進め、承認用ページを依頼者に見せて承認を受ける
+6. push は依頼者が頼んだときだけ行う
 
 ## 5. 初めて Colab で動かすときの確認
 
@@ -152,6 +155,8 @@ uv venv .venv && uv pip install -e '.[dev]' && .venv/bin/pytest
 | `schoolgirl` | 女子生徒 | 現代の制服（ブレザー）の女子。持ち物なし |
 
 4 人とも、`character.yaml` に `style`・`inpaint_box` は書かない（デフォルトの画風 thick-line-flat。表情の範囲は、表情を作るときに決める）。表情は `normal`・`hurt`・`shout` を定義している。絵は顔と全身の 8 枚だけで、表情は作っていない。顔は 4 人とも左向き。
+
+顔のテンプレートは、頭が上の辺で切れず切り出す余地が残るよう、`portrait` でなく `upper body`（上半身）で描く形にした。見本の顔 4 枚は、古いテンプレート（`portrait`）で作ったままで、作り直していない。`templates/face.yaml` の `inpaint.box` の既定値は顔のアップのときの値で、上半身の絵とは合わない。表情を作るときは、キャラクターごとに範囲（`character.yaml` の `inpaint_box`）を決める。
 
 ### 見本の作り方（Colab）
 
@@ -210,7 +215,13 @@ uv venv .venv && uv pip install -e '.[dev]' && .venv/bin/pytest
 
 ### 候補は全部見て選ぶ
 
-候補のページには、作った候補を番号順に全部並べる。頭が切れているか・背景がどうかを、画素を数えて機械的に外す仕組みは入れていない（試したところ、髪と鎧を区別できず、収まっている絵まで外したため。依頼者が全部を目で見て選ぶ）。
+候補のページには、作った候補を、キャラクターごとの見出し（`名前（ID）`）の下に番号順に全部並べる。頭が切れているか・背景がどうかを、画素を数えて機械的に外す仕組みは入れていない（試したところ、髪と鎧を区別できず、収まっている絵まで外したため。依頼者が全部を目で見て選ぶ）。
+
+### 回りをまとめる・候補の背景を消す
+
+- `generate`・`page`・`merge` は、既定でページを作る前に、マスクがまだ無い候補を 40 枚ずつ Modal（CPU）に送り、候補の隣に `<名前>.matte.png` を置く。ページには候補と、背景を消した絵（`defaults.yaml` の `preview_background` の色の上。無ければ市松模様）が 2 枚並ぶ。選んだ後に背景が消えないと分かると選び直しになるため、選ぶ前に見せる。区切りごとに保存するので、途中で落ちても済んだ分は残り、`page` でやり直すと残りだけ送る。`--no-matte` を付けると送らない。候補はテンプレートを問わず全部送る
+- `merge <回りの記録> <回りの記録> [...]`: 2 つ以上の回りの候補を、元の番号順に通し番号を振り直して 1 つの記録（`merged_<日時>.json`）とページにする。元の記録は変えない。Modal の 1 回は 1 時間で打ち切られて絵が全部失われるので、人数が多いときは分けて動かし、あとでまとめる
+- `matte <id> [<id> ...]`: 採用した絵の背景のマスクを作る（[11](#11-切り出しと背景消し)）
 
 ### GPU・版・料金
 
@@ -221,3 +232,53 @@ uv venv .venv && uv pip install -e '.[dev]' && .venv/bin/pytest
 - 条件の `commit` は、このサーバーで調べた値を記録する。未コミットの変更があるときは `+dirty` が付く
 - モデル（約 7GB）は Modal の Volume（`modal_app.py` の `VOLUME_NAME`）に置く。初回だけ取るので遅い
 - T4 は 1 枚 20 秒ほど。12 枚の 1 回りでモデルの読み込みを含めて数分、10 円前後が見込み
+
+---
+
+## 11. 切り出しと背景消し
+
+採用した絵から、注目するもの（顔・全身・将来は武器など）だけを残して背景を透明にし、用途に合う範囲で切り抜いた絵（RGBA の PNG）を書き出す。注目するものは絵の種類（テンプレート）で決まり、どこを切り出すかは用途で変わる。範囲は依頼者が用途を言い、Claude が元の絵を見て座標に直して `character.yaml` に書く。承認用ページで依頼者が見て決める。
+
+### 設定（`character.yaml` の `cutouts`）
+
+テンプレートの名前ごとに書く。`face` の設定は、顔（`face.png`）と表情（`face_<表情>.png`）の全部に同じ範囲で効く（表情は顔を描き直しただけで構図が同じため）。書かないテンプレートは、今までどおりの書き出し（顔は `export_size` に縮める、全身は写す）。
+
+```yaml
+cutouts:
+  face:
+    background: matte          # matte | colors | none
+    erase:                     # matte のときだけ。マスクが体の一部と見た背景の飾りを消す多角形（元の絵の画素の座標）。省いてよい
+      - [[10, 20], [80, 20], [60, 90]]
+    outputs:
+      - {suffix: "", box: [212, 120, 812, 720], width: 256}
+      - {suffix: "-small", box: [312, 180, 712, 580], width: 128}
+  fullbody:
+    background: matte
+    outputs:
+      - {suffix: "", box: null, width: null}
+```
+
+- `background`
+  - `matte`: `characters/<id>/matte/` のマスクで透明にする。マスクの値の 128 以下を透明・200 以上を不透明にし、その間だけをなだらかにする（`harden`。迷った値をそのまま透明度にすると、背景の白が半透明のもやで残るため）。その後 `erase` の多角形の中を透明にする
+  - `colors`: 切り出した範囲の四辺から続く白（全チャンネル 240 以上）と、`clear_colors` に当たる色を透明にする。範囲の内側にあって外につながらない白（白目・服の白）は残る。`clear_colors` は `{min, max_rg, max_gb, min_rg?}` の一覧（`background: colors` のときだけ書ける）。全チャンネルの最小値が `min` 以上、`r-g <= max_rg`、`g-b <= max_gb`、`min_rg` があれば `r-g >= min_rg`。背景が赤みの強い薄い茶で、服が赤みの弱いクリーム色のように、上限だけでは見分けられないときに `min_rg` を使う
+  - `none`: 透明にしない（切り抜いて縮めるだけ）
+- `outputs`: 1 つ以上。`suffix` は出力の名前に付ける文字（`face.png` → `face-small.png`）。`""`（元と同じ名前）か、`-` で始まる半角英数字・`_`・`-` の文字列だけ書ける（書き出しが古い出力を消す対象を、元の名前の `-` 付きに決めているため）。同じテンプレートの中で重ならない
+- `box`: `[x0, y0, x1, y1]`（元の絵の画素）。`null` は絵の全体。元の絵の外にはみ出したら止まる
+- `width`: 書き出す幅。高さは範囲の縦横の比で決まる（四捨五入）。`null` は縮めない。縮めるときはアルファを掛けた形で縮め、透明の縁が黒ずむのを防ぐ
+- 別の入力の出力が同じ名前になる（表情名 `normal` と `normal-small` など）ときは、書く前に止まる
+
+### 流れ
+
+1. `character.yaml` に `cutouts` を書く
+2. `background: matte` なら `.venv/bin/python -m artgen.cloud matte <id> [<id> ...]`。`cutouts` で `background: matte` のテンプレートの元の絵（`source/`）を Modal の CPU に送り、`characters/<id>/matte/` にマスクを置く。`matte.json` に、モデルと元の絵の SHA-256 を記録する。応答を待つあいだに元の絵が差し替わったら止まる
+3. `python -m artgen.export <id>`: 切り抜いて背景を消した絵を `characters/<id>/` に書き、`params.json` の `cutouts` に使った設定・元の絵・マスクの SHA-256 を記録する。透明にした画素を赤で塗った確認図を `local/check/<id>/` に置く（リポジトリに入れない）。元の絵を差し替えたのにマスクを作り直していないと止まり、`cloud matte` を案内する。`cutouts` を消した・出力を減らしたときは、前の書き出しの RGBA・`-small`・確認図を消す。すべての入力を検査してから書くので、検査で止まったときは何も書かれない（書き込みの途中でディスクなどが失敗した場合は除く）。`characters/<id>/` の `<元の名前>-*.png`（`face-small.png` など）と、前回の書き出しの記録にあった名前の絵は、書き出しが管理して消す対象になる（手でそこに置かない）
+4. `python -m artgen.cutout_review <id> [<id> ...] [--out PATH] [--variants]`: 承認用ページを作る（1 人なら `local/check/<id>/review.html`、何人分かなら 1 枚）。元の絵に範囲を色違いの枠で描いた絵、確認図、書き出した絵を書き出した大きさで（市松模様の上と、`preview_background` があればその色の上）並べる。表情（`face_<表情>.png`）は `--variants` を付けたときだけ並べる。範囲や `erase` を直した・マスクを作り直したのに書き出していないときは、ページを作らず止まる（古い絵で承認すると承認が意味を失うため）。何人分かのページは、全員を先に検査し、1 人でも通らなければ作らない
+5. ページを Artifact で依頼者に見せ、承認を受ける
+
+`defaults.yaml` に `preview_background: "#rrggbb"` を書くと、候補のページの背景を消した絵と、承認用ページの書き出した絵をその色の上に置く（作品の画面の背景色に合わせるため。forge の `defaults.yaml` には書かず、コピーした先で書く）。書かなければ市松模様。
+
+### マスクを Modal で作る理由
+
+背景除去のモデル（anime-seg の `isnetis.onnx`）は、推論の途中結果に 2〜3GB 使う。このサーバー（メモリ 1.9GB）で動かすとスワップで応答しなくなったので、Modal の CPU（2 コア・4GB）の中でだけ動かす。onnxruntime・numpy は、このサーバーの `.venv` にも `pyproject.toml` の依存にも入れない（`matte.py` の `isnet_mask` と `modal_app.py` の `matte_remote` の中でだけ import する）。モデルの SHA-256 を固定してあり、取得元が差し替わっていたらマスクを作らない。マスクはリポジトリに入れる。
+
+見本の 4 人の `character.yaml` には `cutouts` を書いていない（見本の書き出しの結果を変えないため）。書き方の実例はこの節の YAML を見る。

@@ -40,7 +40,7 @@ def test_face_template_matches_spec():
 
 
 def test_repo_does_not_mention_the_game():
-    forbidden = ("character-tactics", "FACE_PX")
+    forbidden = ("character-tactics", "face_px", "18222c")
     skip_dirs = {".git", ".venv", ".superpowers", "docs", "tests", "__pycache__"}
     for path in ROOT.rglob("*"):
         if not path.is_file() or skip_dirs & set(path.relative_to(ROOT).parts):
@@ -49,13 +49,14 @@ def test_repo_does_not_mention_the_game():
             continue
         text = path.read_text(encoding="utf-8", errors="ignore")
         for word in forbidden:
-            assert word not in text, f"{path.relative_to(ROOT)} に {word} がある"
+            assert word not in text.lower(), f"{path.relative_to(ROOT)} に {word} がある"
 
 
-def test_face_template_is_left_facing_bust_with_default_box():
+def test_face_template_is_left_facing_upper_body_with_default_box():
     face = load_template(ROOT, "face")
-    assert "upper body" not in face.prompt
-    assert "upper body" in face.negative
+    assert "upper body" in face.prompt
+    assert "portrait" not in face.prompt
+    assert "upper body" not in face.negative
     assert "looking to the side" in face.prompt
     assert face.inpaint_box is not None
     check_box(face.inpaint_box, (face.width, face.height))

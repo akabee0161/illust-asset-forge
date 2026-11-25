@@ -1,10 +1,14 @@
+import hashlib
+import io
 import json
 
 import pytest
+import yaml
 from PIL import Image
 
-from artgen.config import ConfigError
-from artgen.export import ExportError, export_character, main
+from artgen.config import ConfigError, load_character
+from artgen.export import ExportError, check_dir, cutout_record, export_character, main
+from artgen.matte import MODEL_SHA256, save_mattes
 from artgen.pnginfo import MissingParamsError, read_params, save_png
 
 
@@ -14,6 +18,12 @@ def write(root, rel, text):
     path.write_text(text, encoding="utf-8")
 
 
+CHARACTER_YAML = (
+    "name: C\nstyle: s\nsubject: [1boy]\nappearance: []\noutfit: []\n"
+    "default_expression: normal\nexpressions: {normal: [serious], hurt: [pain]}\n"
+)
+
+
 @pytest.fixture
 def repo(tmp_path):
     write(tmp_path, "styles/s.yaml", "prompt: [masterpiece]\nnegative: [lowres]\n")
@@ -21,9 +31,7 @@ def repo(tmp_path):
           "width: 1024\nheight: 1024\nprompt: [portrait]\nnegative: []\nexport_size: 256\n")
     write(tmp_path, "templates/fullbody.yaml",
           "width: 832\nheight: 1216\nprompt: [full body]\nnegative: []\nexport_size: null\n")
-    write(tmp_path, "characters/c1/character.yaml",
-          "name: C\nstyle: s\nsubject: [1boy]\nappearance: []\noutfit: []\n"
-          "default_expression: normal\nexpressions: {normal: [serious], hurt: [pain]}\n")
+    write(tmp_path, "characters/c1/character.yaml", CHARACTER_YAML)
     return tmp_path
 
 
@@ -192,3 +200,225 @@ def test_stale_outputs_are_removed(repo):
     export_character(repo, "c1")
     assert not stale.exists()
     assert list(json.loads((repo / "characters/c1/params.json").read_text(encoding="utf-8"))) == ["face.png"]
+
+
+# --- cutouts ---
+
+def set_cutouts(repo, cutouts, base=CHARACTER_YAML):
+    text = base if cutouts is None else base + yaml.safe_dump({"cutouts": cutouts}, allow_unicode=True)
+    write(repo, "characters/c1/character.yaml", text)
+
+
+def two_outputs(background="none", **extra):
+    return {
+        "background": background,
+        "outputs": [
+            {"suffix": "", "box": [0, 0, 1024, 1024], "width": 256},
+            {"suffix": "-small", "box": [256, 256, 768, 768], "width": 128},
+        ],
+        **extra,
+    }
+
+
+def png_bytes(image):
+    buf = io.BytesIO()
+    image.save(buf, format="PNG")
+    return buf.getvalue()
+
+
+def half_mask(size=(1024, 1024)):
+    mask = Image.new("L", size, 255)
+    mask.paste(0, (size[0] // 2, 0, size[0], size[1]))
+    return mask
+
+
+def make_matte(repo, names, mask=None):
+    save_mattes(repo, "c1", {n: png_bytes(mask or half_mask()) for n in names}, MODEL_SHA256)
+
+
+def snapshot(repo):
+    base = repo / "characters/c1"
+    return {p.name: p.read_bytes() for p in base.iterdir() if p.is_file() and p.name != "character.yaml"}
+
+
+def test_export_without_cutouts_is_unchanged(repo):
+    put(repo, "face.png", (1024, 1024), "face")
+    put(repo, "fullbody.png", (832, 1216), "fullbody")
+    export_character(repo, "c1")
+    assert Image.open(repo / "characters/c1/face.png").mode == "RGB"
+    assert Image.open(repo / "characters/c1/face.png").size == (256, 256)
+    assert (repo / "characters/c1/fullbody.png").read_bytes() == (repo / "characters/c1/source/fullbody.png").read_bytes()
+    assert "cutouts" not in json.loads((repo / "characters/c1/params.json").read_text(encoding="utf-8"))
+    assert not (repo / "local/check/c1").exists()
+
+
+def test_export_cutouts_write_each_output_as_rgba(repo):
+    put(repo, "face.png", (1024, 1024), "face")
+    put(repo, "face_hurt.png", (1024, 1024), "face")
+    set_cutouts(repo, {"face": two_outputs()})
+    export_character(repo, "c1")
+    for name, size in [("face.png", 256), ("face-small.png", 128), ("face_hurt.png", 256), ("face_hurt-small.png", 128)]:
+        im = Image.open(repo / "characters/c1" / name)
+        assert im.mode == "RGBA" and im.size == (size, size), name
+
+
+def test_export_cutout_width_keeps_box_ratio(repo):
+    put(repo, "fullbody.png", (832, 1216), "fullbody")
+    set_cutouts(repo, {"fullbody": {"background": "none", "outputs": [{"suffix": "", "box": [0, 0, 400, 600], "width": 200}]}})
+    export_character(repo, "c1")
+    assert Image.open(repo / "characters/c1/fullbody.png").size == (200, 300)
+
+
+def test_export_matte_uses_mask_and_erase(repo):
+    put(repo, "face.png", (1024, 1024), "face")
+    make_matte(repo, ["face.png"])
+    cfg = {"background": "matte", "erase": [[[0, 0], [200, 0], [200, 200]]], "outputs": [{"suffix": "", "width": 256}]}
+    set_cutouts(repo, {"face": cfg})
+    export_character(repo, "c1")
+    out = Image.open(repo / "characters/c1/face.png")
+    assert out.getpixel((20, 100))[3] == 255
+    assert out.getpixel((200, 100))[3] == 0
+    assert out.getpixel((8, 2))[3] == 0  # erase の多角形の中
+
+
+def test_export_stops_when_matte_is_missing(repo):
+    put(repo, "face.png", (1024, 1024), "face")
+    set_cutouts(repo, {"face": two_outputs("matte")})
+    with pytest.raises(ExportError, match="python -m artgen.cloud matte c1"):
+        export_character(repo, "c1")
+
+
+def test_export_stops_when_matte_is_older_than_source(repo):
+    put(repo, "face.png", (1024, 1024), "face")
+    make_matte(repo, ["face.png"])
+    put(repo, "face.png", (1024, 1024), "face", seed=99)
+    set_cutouts(repo, {"face": two_outputs("matte")})
+    with pytest.raises(ExportError, match="古い.*cloud matte c1"):
+        export_character(repo, "c1")
+
+
+def test_export_writes_nothing_when_one_variant_matte_is_stale(repo):
+    put(repo, "face.png", (1024, 1024), "face")
+    put(repo, "face_hurt.png", (1024, 1024), "face")
+    make_matte(repo, ["face.png", "face_hurt.png"])
+    set_cutouts(repo, {"face": two_outputs("matte")})
+    export_character(repo, "c1")
+    before = snapshot(repo)
+    put(repo, "face_hurt.png", (1024, 1024), "face", seed=99)  # 表情だけ差し替えた
+    set_cutouts(repo, {"face": {**two_outputs("matte"), "outputs": [{"suffix": "", "width": 100}]}})
+    with pytest.raises(ExportError, match="face_hurt.png"):
+        export_character(repo, "c1")
+    assert snapshot(repo) == before
+
+
+def test_export_stops_when_box_is_outside_image(repo):
+    put(repo, "face.png", (1024, 1024), "face")
+    set_cutouts(repo, {"face": {"background": "none", "outputs": [{"suffix": "", "box": [0, 0, 2000, 100]}]}})
+    with pytest.raises(ConfigError, match=r"cutouts\.face\.outputs\[0\]\.box"):
+        export_character(repo, "c1")
+
+
+def test_export_stops_when_outputs_collide(repo):
+    base = CHARACTER_YAML.replace("hurt: [pain]", "normal-small: [x]")
+    put(repo, "face_normal.png", (1024, 1024), "face")
+    put(repo, "face_normal-small.png", (1024, 1024), "face")
+    set_cutouts(repo, {"face": two_outputs()}, base=base)
+    with pytest.raises(ExportError, match="同じ名前"):
+        export_character(repo, "c1")
+
+
+def test_export_removes_outputs_of_removed_cutouts(repo):
+    put(repo, "face.png", (1024, 1024), "face")
+    put(repo, "face_hurt.png", (1024, 1024), "face")
+    set_cutouts(repo, {"face": two_outputs()})
+    export_character(repo, "c1")
+    assert (repo / "characters/c1/face-small.png").exists()
+    set_cutouts(repo, None)
+    export_character(repo, "c1")
+    assert not (repo / "characters/c1/face-small.png").exists()
+    assert not (repo / "characters/c1/face_hurt-small.png").exists()
+    assert not list((repo / "local/check/c1").glob("*.png"))
+    out = Image.open(repo / "characters/c1/face.png")
+    assert out.mode == "RGB" and out.size == (256, 256)
+
+
+def test_export_records_cutouts_in_params(repo):
+    put(repo, "face.png", (1024, 1024), "face")
+    make_matte(repo, ["face.png"])
+    set_cutouts(repo, {"face": two_outputs("matte", erase=[[[0, 0], [9, 0], [9, 9]]])})
+    export_character(repo, "c1")
+    params = json.loads((repo / "characters/c1/params.json").read_text(encoding="utf-8"))
+    character = load_character(repo, "c1")
+    expected = cutout_record(character.cutouts["face"], repo / "characters/c1/source", ["face.png"])
+    assert params["cutouts"] == {"face": expected}
+    assert expected["matte_sha256"]["face.png"] == hashlib.sha256((repo / "characters/c1/matte/face.png").read_bytes()).hexdigest()
+    assert expected["outputs"][1] == {"suffix": "-small", "box": [256, 256, 768, 768], "width": 128}
+    assert expected["erase"] == [[[0, 0], [9, 0], [9, 9]]]
+
+
+def test_export_writes_check_images(repo):
+    put(repo, "face.png", (1024, 1024), "face")
+    set_cutouts(repo, {"face": two_outputs()})
+    export_character(repo, "c1")
+    check = check_dir(repo, "c1")
+    assert Image.open(check / "face.png").size == (1024, 1024)
+    assert Image.open(check / "face-small.png").size == (512, 512)
+
+
+def test_export_removes_outputs_of_removed_expression(repo):
+    put(repo, "face.png", (1024, 1024), "face")
+    put(repo, "face_hurt.png", (1024, 1024), "face")
+    set_cutouts(repo, {"face": two_outputs()})
+    export_character(repo, "c1")
+    assert (repo / "characters/c1/face_hurt-small.png").exists()
+    (repo / "characters/c1/source/face_hurt.png").unlink()
+    set_cutouts(repo, {"face": two_outputs()}, base=CHARACTER_YAML.replace("hurt: [pain]", "shout: [x]"))
+    export_character(repo, "c1")
+    assert not (repo / "characters/c1/face_hurt.png").exists()
+    assert not (repo / "characters/c1/face_hurt-small.png").exists()
+    assert (repo / "characters/c1/face.png").exists()
+
+
+def test_export_stops_with_one_line_when_matte_json_is_broken(repo):
+    put(repo, "face.png", (1024, 1024), "face")
+    make_matte(repo, ["face.png"])
+    (repo / "characters/c1/matte/matte.json").write_text("{broken", encoding="utf-8")
+    set_cutouts(repo, {"face": two_outputs("matte")})
+    with pytest.raises(ExportError, match="matte.json.*cloud matte c1"):
+        export_character(repo, "c1")
+
+
+def test_export_records_sha_of_the_source_it_rendered(repo, monkeypatch):
+    import artgen.export as E
+
+    path = put(repo, "face.png", (1024, 1024), "face")
+    make_matte(repo, ["face.png"])
+    set_cutouts(repo, {"face": two_outputs("matte")})
+    rendered_sha = hashlib.sha256(path.read_bytes()).hexdigest()
+    real_render = E.render
+    swapped = []
+
+    def render_then_swap(*args, **kwargs):
+        if not swapped:  # 描画のあいだに、別の処理が元の絵を差し替えた
+            swapped.append(True)
+            put(repo, "face.png", (1024, 1024), "face", seed=99)
+        return real_render(*args, **kwargs)
+
+    monkeypatch.setattr(E, "render", render_then_swap)
+    export_character(repo, "c1")
+    params = json.loads((repo / "characters/c1/params.json").read_text(encoding="utf-8"))
+    assert params["cutouts"]["face"]["source_sha256"]["face.png"] == rendered_sha
+
+
+def test_export_ignores_broken_previous_params(repo):
+    put(repo, "face.png", (1024, 1024), "face")
+    (repo / "characters/c1/params.json").write_text("[1]", encoding="utf-8")
+    export_character(repo, "c1")
+    assert list(json.loads((repo / "characters/c1/params.json").read_text(encoding="utf-8"))) == ["face.png"]
+
+
+def test_export_stops_when_output_height_would_be_zero(repo):
+    put(repo, "fullbody.png", (2000, 2), "fullbody")
+    set_cutouts(repo, {"fullbody": {"background": "none", "outputs": [{"suffix": "", "width": 10}]}})
+    with pytest.raises(ConfigError, match=r"cutouts\.fullbody\.outputs\[0\]\.width"):
+        export_character(repo, "c1")

@@ -1,11 +1,15 @@
+import re
 from pathlib import Path
 
 import pytest
 
 from artgen.config import (
+    ClearColor,
     ConfigError,
+    CutoutOutput,
     load_character,
     load_default_style,
+    load_preview_background,
     load_style,
     load_template,
 )
@@ -262,3 +266,109 @@ def test_inline_style_rejects_bad_input(value, match):
 
     with pytest.raises(ConfigError, match=match):
         inline_style(value)
+
+
+# --- cutouts ---
+
+FACE_CUTOUT = """\
+cutouts:
+  face:
+    background: matte
+    erase:
+      - [[10, 20], [80, 20], [60, 90]]
+    outputs:
+      - {suffix: "", box: [212, 120, 812, 720], width: 256}
+      - {suffix: "-small", box: [312, 180, 712, 580], width: 128}
+  fullbody:
+    background: none
+    outputs:
+      - {suffix: ""}
+"""
+
+
+@pytest.fixture
+def repo(tmp_path):
+    write(tmp_path, "templates/face.yaml", TEMPLATE_YAML)
+    write(tmp_path, "templates/fullbody.yaml", TEMPLATE_YAML)
+    write(tmp_path, "defaults.yaml", "style: color-anime\n")
+    write_character(tmp_path)
+    return tmp_path
+
+
+def with_cutouts(repo, cutouts_yaml: str) -> None:
+    write_character(repo, CHARACTER_YAML + cutouts_yaml)
+
+
+def test_cutouts_are_read_per_template(repo):
+    with_cutouts(repo, FACE_CUTOUT)
+    c = load_character(repo, "c1")
+    face = c.cutouts["face"]
+    assert face.template == "face"
+    assert face.background == "matte"
+    assert face.erase == (((10, 20), (80, 20), (60, 90)),)
+    assert face.outputs == (
+        CutoutOutput("", (212, 120, 812, 720), 256),
+        CutoutOutput("-small", (312, 180, 712, 580), 128),
+    )
+    assert c.cutouts["fullbody"].outputs == (CutoutOutput("", None, None),)
+    assert c.cutouts["fullbody"].background == "none"
+
+
+def test_character_without_cutouts_has_empty_dict(repo):
+    assert load_character(repo, "c1").cutouts == {}
+
+
+@pytest.mark.parametrize(
+    "cutouts, where",
+    [
+        ("{weapon: {background: none, outputs: [{suffix: ''}]}}", "cutouts.weapon"),
+        ("{face: {background: blur, outputs: [{suffix: ''}]}}", "cutouts.face.background"),
+        ("{face: {background: matte, clear_colors: [{min: 200, max_rg: 10, max_gb: 10}], outputs: [{suffix: ''}]}}", "cutouts.face.clear_colors"),
+        ("{face: {background: colors, erase: [[[0,0],[1,0],[1,1]]], outputs: [{suffix: ''}]}}", "cutouts.face.erase"),
+        ("{face: {background: none, outputs: []}}", "cutouts.face.outputs"),
+        ("{face: {background: none, outputs: [{suffix: ''}, {suffix: ''}]}}", "cutouts.face.outputs[1].suffix"),
+        ("{face: {background: none, outputs: [{suffix: 'a/b'}]}}", "cutouts.face.outputs[0].suffix"),
+        ("{face: {background: none, outputs: [{suffix: '', width: 0}]}}", "cutouts.face.outputs[0].width"),
+        ("{face: {background: none, outputs: [{suffix: '', size: 3}]}}", "cutouts.face.outputs[0]"),
+        ("{face: {background: colors, clear_colors: [{min: 200, max_rg: 10, max_gb: 10, min_rg: 20}], outputs: [{suffix: ''}]}}", "cutouts.face.clear_colors[0].min_rg"),
+        ("{face: {background: none, mode: x, outputs: [{suffix: ''}]}}", "cutouts.face"),
+        ("{face: {outputs: [{suffix: ''}]}}", "cutouts.face.background"),
+        ("{face: {background: none}}", "cutouts.face.outputs"),
+        ("[1]", "cutouts"),
+        ("{face: {background: none, outputs: [{suffix: '', box: [0, 0, 1024, 1], width: 256}]}}", "cutouts.face.outputs[0].width"),
+        ("{face: {background: none, outputs: [{suffix: '_small'}]}}", "cutouts.face.outputs[0].suffix"),
+        ("{face: {background: none, outputs: [{suffix: 'small'}]}}", "cutouts.face.outputs[0].suffix"),
+        ("{face: {background: none, outputs: [{suffix: '-'}]}}", "cutouts.face.outputs[0].suffix"),
+        ("{'../defaults': {background: none, outputs: [{suffix: ''}]}}", "cutouts.../defaults"),
+        ("{face: {background: none, outputs: [{suffix: '', box: [5, 5, 1, 1]}]}}", "cutouts.face.outputs[0].box"),
+    ],
+)
+def test_bad_cutouts_stop_with_location(repo, cutouts, where):
+    with_cutouts(repo, f"cutouts: {cutouts}\n")
+    with pytest.raises(ConfigError, match=re.escape(f"characters/c1/character.yaml: {where}")):
+        load_character(repo, "c1")
+
+
+def test_clear_colors_keep_optional_min_rg(repo):
+    with_cutouts(
+        repo,
+        "cutouts:\n  face:\n    background: colors\n    clear_colors:\n"
+        "      - {min: 200, max_rg: 10, max_gb: 10}\n"
+        "      - {min: 150, max_rg: 40, max_gb: 30, min_rg: 5}\n"
+        "    outputs: [{suffix: ''}]\n",
+    )
+    colors = load_character(repo, "c1").cutouts["face"].clear_colors
+    assert colors == (ClearColor(200, 10, 10, None), ClearColor(150, 40, 30, 5))
+
+
+def test_preview_background_is_optional(repo):
+    assert load_preview_background(repo) is None
+    write(repo, "defaults.yaml", 'style: color-anime\npreview_background: "#3366AA"\n')
+    assert load_preview_background(repo) == "#3366AA"
+    write(repo, "defaults.yaml", "style: color-anime\npreview_background: red\n")
+    with pytest.raises(ConfigError, match=re.escape("defaults.yaml: preview_background")):
+        load_preview_background(repo)
+
+
+def test_preview_background_is_none_without_defaults_file(tmp_path):
+    assert load_preview_background(tmp_path) is None

@@ -1,20 +1,22 @@
 # illust-asset-forge 引き継ぎ
 
 ## 進捗
-作業: forge 本体に Modal の生成を戻す
+作業: forge 本体に切り出しと背景消しを入れる
 工程:
-1. Modal の仕組み・テスト・README・CLAUDE.md を forge 本体へ持ってくる（完了）
-2. main を新しく clone して、README の手順どおりに Modal の T4 で見本を生成して確かめる（完了）
-3. コピー先の UPSTREAM.md の「forge に戻す候補」を、戻した状態に直す（完了）
-段階: 完了
+1. 設計（docs/superpowers/specs/2026-11-24-cutout-design.md）（完了）
+2. 実装計画（docs/superpowers/plans/2026-11-24-cutout.md）（完了）
+3. 実装と、一時フォルダでの本物の Modal での確かめ（完了）
+4. コピー先の UPSTREAM.md の該当の行を「戻した」に直す（コピー先の PR） ← 今ここ
+段階: 実装（9 タスク中 9）
 次にやること:
-- なし
+- 依頼者が頼んだら、push して PR を作る（CodeRabbit の対象が 100 ファイル以下か数えてから）
+- PR がマージされたら、コピー先の UPSTREAM.md の該当の行を「戻した」に直す（コピー先の別の PR）
 
 以後このリポジトリは、各作品のリポジトリへ丸ごとコピーして使う（作品ごとの作り込みはコピーの側で行う。`README.md` 8）。
 
 ## 概要
 
-ゲーム用のキャラクターのイラストを Colab か Modal（T4）の GPU で生成する汎用のリポジトリ。Modal の道（`artgen.cloud`）は、最初のコピー先で作ったものを持ち帰った（コピー先の顔の切り出し `face_crop`・`crop_review` は持ち帰っていない）。設計は `docs/superpowers/specs/2026-11-21-illust-asset-forge-design.md`。使い方は `README.md`、作業規約は `CLAUDE.md`。
+ゲーム用のキャラクターのイラストを Colab か Modal（T4）の GPU で生成する汎用のリポジトリ。Modal の道（`artgen.cloud`）は、最初のコピー先で作ったものを持ち帰った（コピー先の顔の切り出し `face_crop`・`crop_review` は、テンプレートごとの切り出しと背景消し `cutout`・`cutout_review`・`matte` に広げて、持ち帰った。README 11）。設計は `docs/superpowers/specs/2026-11-21-illust-asset-forge-design.md`。使い方は `README.md`、作業規約は `CLAUDE.md`。
 
 ## 状態
 
